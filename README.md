@@ -5,9 +5,9 @@ O projeto está sendo desenvolvido em etapas pequenas, com revisão antes de cad
 
 ## Etapa atual
 
-Configuração do PostgreSQL e persistência de usuários com migration Flyway,
-entidade JPA, repositório e testes de integração.
-O cadastro público, o login e os demais endpoints serão implementados nas próximas etapas.
+Configuração do PostgreSQL, persistência de usuários e cadastro público de clientes,
+com validação, senha em BCrypt e erros em Problem Details.
+O login, a emissão de JWT e os demais endpoints serão implementados nas próximas etapas.
 
 ## Tecnologias
 
@@ -95,10 +95,57 @@ A entidade normaliza o e-mail usando `Locale.ROOT`. O banco também exige a form
 normalizada e a unicidade, inclusive em inserções que não passam pelo código Java.
 A busca no repositório recebe o e-mail já normalizado.
 
-O campo `passwordHash` recebe um hash previamente calculado. O cálculo BCrypt será
-implementado junto ao cadastro; esta etapa não oferece uma API para criar usuários.
-Na etapa de cadastro público, o serviço definirá sempre o perfil `CUSTOMER`.
+O campo `passwordHash` recebe um hash BCrypt calculado pelo serviço de cadastro.
+O cadastro público define sempre o perfil `CUSTOMER`.
 
 Os testes de integração verificam persistência dos perfis, busca por e-mail,
 unicidade após normalização e rejeição de e-mails não normalizados e perfis inválidos
 por inserção direta no PostgreSQL. As transações dos testes são revertidas após cada caso.
+
+## Cadastro público
+
+`POST /api/v1/auth/register` aceita apenas `name`, `email` e `password`.
+O nome é obrigatório e limitado a 100 caracteres. O e-mail deve ser válido, com até
+254 caracteres; nome e e-mail têm espaços nas extremidades removidos antes da validação.
+A senha deve ter de 12 a 72 caracteres e no máximo 72 bytes em UTF-8.
+Ela é preservada como informada, incluindo espaços, e armazenada com BCrypt de custo 12.
+
+Exemplo no PowerShell, com a aplicação em execução:
+
+```powershell
+$request = @{
+    name = "Customer"
+    email = "customer@example.test"
+    password = "example-password-2026"
+} | ConvertTo-Json
+
+Invoke-RestMethod -Method Post -Uri "http://localhost:8080/api/v1/auth/register" `
+    -ContentType "application/json" -Body $request
+```
+
+A resposta `201 Created` contém `id`, `name`, `email`, `role` e `createdAt`;
+nunca contém senha ou hash. O campo `role` não faz parte da entrada:
+enviá-lo, mesmo com `CUSTOMER`, gera `400 Bad Request`.
+Outros campos desconhecidos também são rejeitados.
+
+Entradas inválidas retornam `400`; e-mails já cadastrados retornam `409 Conflict`.
+Os erros usam `application/problem+json`, com `type`, `title`, `status`, `detail`
+e, em falhas de validação, a lista `errors` com campo e mensagem, sem o valor da senha.
+A constraint única do banco também protege contra cadastros concorrentes:
+um conflito na persistência retorna `409`, sem detalhes internos do banco.
+
+A configuração de segurança libera somente o cadastro por `POST` e o health por `GET`.
+As demais rotas permanecem bloqueadas nesta etapa. Não há sessão, formulário de login
+ou autenticação Basic. O endpoint `/actuator/health` é público sem detalhes sensíveis;
+nenhum outro endpoint do Actuator é exposto.
+O CSRF está desativado porque a API não autentica por cookies de sessão;
+a autenticação por Bearer JWT será implementada na próxima etapa.
+
+Para executar apenas os testes de serviço e de HTTP, sem Docker:
+
+```powershell
+.\mvnw.cmd "-Dtest=RegistrationServiceTests,RegistrationControllerTests" test
+```
+
+A suíte completa também inclui `RegistrationIntegrationTests`, com a cadeia de
+segurança, validação, serviço e persistência reais usando PostgreSQL via Testcontainers.
