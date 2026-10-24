@@ -24,7 +24,7 @@ import static org.assertj.core.api.Assertions.within;
 @SpringBootTest
 @Import(TestcontainersConfiguration.class)
 @Transactional
-class UserRepositoryIntegrationTests {
+class UserRepositoryIntegrationTests extends JwtTestSupport {
 
     private static final String PASSWORD_HASH = new BCryptPasswordEncoder(4).encode("test-password");
 

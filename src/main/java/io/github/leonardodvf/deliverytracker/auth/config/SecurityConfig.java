@@ -14,6 +14,9 @@ import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.security.oauth2.jwt.JwtDecoder;
+import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationConverter;
+import org.springframework.security.oauth2.server.resource.authentication.JwtGrantedAuthoritiesConverter;
 import tools.jackson.databind.ObjectMapper;
 
 import java.io.IOException;
@@ -30,7 +33,12 @@ public class SecurityConfig {
     }
 
     @Bean
-    SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
+    SecurityFilterChain securityFilterChain(HttpSecurity http, JwtDecoder decoder) throws Exception {
+        var roles = new JwtGrantedAuthoritiesConverter();
+        roles.setAuthoritiesClaimName("role");
+        roles.setAuthorityPrefix("ROLE_");
+        var converter = new JwtAuthenticationConverter();
+        converter.setJwtGrantedAuthoritiesConverter(roles);
         return http
                 .csrf(AbstractHttpConfigurer::disable)
                 .formLogin(AbstractHttpConfigurer::disable)
@@ -38,9 +46,16 @@ public class SecurityConfig {
                 .requestCache(AbstractHttpConfigurer::disable)
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth -> auth
-                        .requestMatchers(HttpMethod.POST, "/api/v1/auth/register").permitAll()
+                        .requestMatchers(HttpMethod.POST, "/api/v1/auth/register", "/api/v1/auth/login").permitAll()
                         .requestMatchers(HttpMethod.GET, "/actuator/health").permitAll()
+                        .requestMatchers(HttpMethod.GET, "/api/v1/users/me").hasAnyRole("CUSTOMER", "OPERATOR")
                         .anyRequest().denyAll())
+                .oauth2ResourceServer(resource -> resource
+                        .jwt(jwt -> jwt.decoder(decoder).jwtAuthenticationConverter(converter))
+                        .authenticationEntryPoint((request, response, exception) ->
+                                writeProblem(response, HttpStatus.UNAUTHORIZED, "Invalid or missing bearer token"))
+                        .accessDeniedHandler((request, response, exception) ->
+                                writeProblem(response, HttpStatus.FORBIDDEN, "Access denied")))
                 .exceptionHandling(errors -> errors
                         .authenticationEntryPoint((request, response, exception) ->
                                 writeProblem(response, HttpStatus.UNAUTHORIZED, "Authentication required"))

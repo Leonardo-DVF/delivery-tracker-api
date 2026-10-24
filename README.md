@@ -5,9 +5,9 @@ O projeto está sendo desenvolvido em etapas pequenas, com revisão antes de cad
 
 ## Etapa atual
 
-Configuração do PostgreSQL, persistência de usuários e cadastro público de clientes,
-com validação, senha em BCrypt e erros em Problem Details.
-O login, a emissão de JWT e os demais endpoints serão implementados nas próximas etapas.
+Configuração do PostgreSQL, persistência de usuários, cadastro público, login com JWT
+e consulta do perfil autenticado, com validação, BCrypt e erros em Problem Details.
+Entregas, frete, rastreamento e integrações serão implementados nas próximas etapas.
 
 ## Tecnologias
 
@@ -46,7 +46,18 @@ alterar a senha em `.env` não altera automaticamente a senha de um banco já cr
 
 ## Executar a aplicação
 
-Na raiz do projeto:
+Gere as chaves RSA de desenvolvimento, uma única vez, na raiz do projeto:
+
+```powershell
+java tools/GenerateJwtKeys.java
+```
+
+O gerador usa apenas o Java 21 e cria um par RSA de 3072 bits em `secrets/`:
+`private.pem` em PKCS#8 e `public.pem` em X.509. Ele recusa sobrescrever arquivos
+existentes. A pasta é ignorada pelo Git. No Windows, os arquivos herdam as permissões
+da pasta; no Linux/macOS, a chave privada é criada com permissão `600`.
+
+Depois execute, na raiz do projeto:
 
 ```powershell
 .\mvnw.cmd spring-boot:run "-Dspring-boot.run.profiles=local"
@@ -63,6 +74,14 @@ diretamente. Nesta etapa, o Compose executa somente o PostgreSQL; a aplicação 
 | `DB_NAME` | `delivery_tracker` | Nome do banco |
 | `DB_USERNAME` | `delivery` | Usuário do banco |
 | `DB_PASSWORD` | Sem senha predefinida | Senha definida localmente |
+| `JWT_ISSUER` | `delivery-tracker-api` | Emissor esperado e usado no JWT |
+| `JWT_PRIVATE_KEY` | `file:./secrets/private.pem` | Chave privada RSA em PEM PKCS#8 |
+| `JWT_PUBLIC_KEY` | `file:./secrets/public.pem` | Chave pública RSA em PEM X.509 |
+| `JWT_TTL_SECONDS` | `3600` | Validade do token, entre 60 e 86400 segundos |
+
+As chaves são obrigatórias ao iniciar a aplicação e precisam formar um par RSA de
+pelo menos 2048 bits. Em outros ambientes, forneça caminhos externos pelas variáveis
+`JWT_PRIVATE_KEY` e `JWT_PUBLIC_KEY`. Nenhuma chave ou senha real faz parte do repositório.
 
 O JPA valida o schema com `ddl-auto: validate`, sem criar ou modificar tabelas.
 O Flyway executa as migrations de `src/main/resources/db/migration` antes da validação do JPA.
@@ -78,6 +97,7 @@ Com Docker Desktop em execução:
 
 O teste de contexto usa um PostgreSQL 17 isolado via Testcontainers.
 Os testes não dependem do banco do Compose nem exigem um arquivo `.env`.
+As chaves de teste são geradas temporariamente, sem depender de `secrets/`.
 No Linux ou macOS, utilize `./mvnw` no lugar de `.\mvnw.cmd`.
 
 ## Persistência de usuários
@@ -134,12 +154,13 @@ e, em falhas de validação, a lista `errors` com campo e mensagem, sem o valor 
 A constraint única do banco também protege contra cadastros concorrentes:
 um conflito na persistência retorna `409`, sem detalhes internos do banco.
 
-A configuração de segurança libera somente o cadastro por `POST` e o health por `GET`.
-As demais rotas permanecem bloqueadas nesta etapa. Não há sessão, formulário de login
+A configuração de segurança libera o cadastro e o login por `POST` e o health por `GET`.
+O perfil exige Bearer JWT; as demais rotas permanecem bloqueadas nesta etapa.
+Não há sessão, formulário de login
 ou autenticação Basic. O endpoint `/actuator/health` é público sem detalhes sensíveis;
 nenhum outro endpoint do Actuator é exposto.
 O CSRF está desativado porque a API não autentica por cookies de sessão;
-a autenticação por Bearer JWT será implementada na próxima etapa.
+a autenticação usa Bearer JWT no cabeçalho `Authorization`.
 
 Para executar apenas os testes de serviço e de HTTP, sem Docker:
 
@@ -149,3 +170,55 @@ Para executar apenas os testes de serviço e de HTTP, sem Docker:
 
 A suíte completa também inclui `RegistrationIntegrationTests`, com a cadeia de
 segurança, validação, serviço e persistência reais usando PostgreSQL via Testcontainers.
+
+## Login e perfil autenticado
+
+`POST /api/v1/auth/login` recebe apenas `email` e `password`. O e-mail é normalizado
+como no cadastro. A senha é comparada com o hash BCrypt e nunca é devolvida.
+E-mail desconhecido e senha incorreta produzem o mesmo `401 Unauthorized`, com a
+mensagem `Invalid email or password`. A comparação BCrypt também é executada quando
+o e-mail não existe, usando um hash fictício, para reduzir diferenças de tempo.
+
+Após cadastrar um cliente pelo exemplo anterior:
+
+```powershell
+$credentials = @{
+    email = "customer@example.test"
+    password = "example-password-2026"
+} | ConvertTo-Json
+
+$session = Invoke-RestMethod -Method Post -Uri "http://localhost:8080/api/v1/auth/login" `
+    -ContentType "application/json" -Body $credentials
+
+Invoke-RestMethod -Uri "http://localhost:8080/api/v1/users/me" `
+    -Headers @{ Authorization = "Bearer $($session.accessToken)" }
+```
+
+O login retorna `accessToken`, `tokenType` (`Bearer`), `expiresIn` em segundos e
+`expiresAt` em ISO 8601. O JWT é assinado com RS256 e contém somente `iss`, `sub`
+(UUID do usuário), `iat`, `exp` e `role`. E-mail, nome, senha e hash não são incluídos.
+
+O Resource Server valida a assinatura, RS256, issuer, expiração, `nbf` quando presente,
+UUID e perfil. `iat` e `exp` são obrigatórios; tokens com emissão futura são rejeitados.
+Não há tolerância adicional de relógio: mantenha os relógios sincronizados.
+O perfil é convertido em uma autoridade `ROLE_CUSTOMER` ou `ROLE_OPERATOR`.
+As chaves são lidas de arquivos locais configurados, sem descoberta de emissor pela rede.
+
+`GET /api/v1/users/me` devolve apenas o perfil correspondente ao `sub` validado,
+sem receber um ID de usuário na URL ou no payload. Ambos os perfis podem acessá-lo.
+Token ausente, inválido ou expirado gera `401`. Um usuário removido do banco também
+recebe `401`. O DTO possui os mesmos cinco campos públicos retornados no cadastro.
+
+Nesta versão, não há refresh token, revogação individual, logout no servidor ou
+rotação simultânea de múltiplas chaves. Tokens permanecem válidos até expirar;
+trocar o par de chaves e reiniciar a aplicação invalida tokens assinados pelo par antigo.
+A criação local de operadores será adicionada em uma etapa posterior.
+
+Para verificar autenticação sem Docker, com assinaturas e filtros reais e repositório simulado:
+
+```powershell
+.\mvnw.cmd "-Dtest=RegistrationServiceTests,RegistrationControllerTests,AuthenticationControllerTests,JwtConfigTests" test
+```
+
+`AuthenticationIntegrationTests` cobre cadastro, login e consulta do perfil com o
+PostgreSQL real do Testcontainers. Execute `.\mvnw.cmd test` com Docker para a suíte completa.

@@ -15,6 +15,7 @@ import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
 import org.springframework.context.annotation.Import;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.MediaType;
+import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 import tools.jackson.databind.ObjectMapper;
@@ -37,6 +38,7 @@ class RegistrationControllerTests {
     @Autowired private MockMvc mvc;
     @Autowired private ObjectMapper json;
     @MockitoBean private RegistrationService registration;
+    @MockitoBean private JwtDecoder decoder;
 
     @Test
     void allowsAnonymousRegistrationAndReturnsOnlyPublicUserFields() throws Exception {

@@ -23,7 +23,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @AutoConfigureMockMvc
 @Import(TestcontainersConfiguration.class)
 @Transactional
-class RegistrationIntegrationTests {
+class RegistrationIntegrationTests extends JwtTestSupport {
 
     @Autowired private MockMvc mvc;
     @Autowired private ObjectMapper json;

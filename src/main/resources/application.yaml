@@ -25,3 +25,9 @@ management:
   endpoint:
     health:
       show-details: never
+app:
+  jwt:
+    issuer: ${JWT_ISSUER:delivery-tracker-api}
+    private-key: ${JWT_PRIVATE_KEY:file:./secrets/private.pem}
+    public-key: ${JWT_PUBLIC_KEY:file:./secrets/public.pem}
+    ttl-seconds: ${JWT_TTL_SECONDS:3600}
