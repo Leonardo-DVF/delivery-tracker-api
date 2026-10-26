@@ -8,6 +8,7 @@ O projeto está sendo desenvolvido em etapas pequenas, com revisão antes de cad
 Configuração do PostgreSQL, persistência de usuários, cadastro público, login com JWT
 e consulta do perfil autenticado, com validação, BCrypt e erros em Problem Details.
 O perfil `local` permite criar um operador de desenvolvimento com credenciais externas.
+Os endpoints atuais têm documentação interativa OpenAPI/Swagger.
 Entregas, frete, rastreamento e integrações serão implementados nas próximas etapas.
 
 ## Tecnologias
@@ -81,6 +82,7 @@ diretamente. Nesta etapa, o Compose executa somente o PostgreSQL; a aplicação 
 | `JWT_TTL_SECONDS` | `3600` | Validade do token, entre 60 e 86400 segundos |
 | `LOCAL_OPERATOR_EMAIL` | Não definido | E-mail do operador; usado somente no perfil `local` |
 | `LOCAL_OPERATOR_PASSWORD` | Não definida | Senha do operador; usada somente no perfil `local` |
+| `API_DOCS_ENABLED` | `true` | Habilita ou desabilita OpenAPI e Swagger UI juntos |
 
 As chaves são obrigatórias ao iniciar a aplicação e precisam formar um par RSA de
 pelo menos 2048 bits. Em outros ambientes, forneça caminhos externos pelas variáveis
@@ -158,6 +160,7 @@ A constraint única do banco também protege contra cadastros concorrentes:
 um conflito na persistência retorna `409`, sem detalhes internos do banco.
 
 A configuração de segurança libera o cadastro e o login por `POST` e o health por `GET`.
+As rotas da documentação também permitem consultas por `GET` sem autenticação.
 O perfil exige Bearer JWT; as demais rotas permanecem bloqueadas nesta etapa.
 Não há sessão, formulário de login
 ou autenticação Basic. O endpoint `/actuator/health` é público sem detalhes sensíveis;
@@ -263,3 +266,44 @@ Para verificar as regras e a ativação por perfil sem Docker:
 `LocalOperatorIntegrationTests` verifica persistência, reinicialização idempotente,
 login e consulta do operador no PostgreSQL do Testcontainers, além de proteger clientes
 contra promoção. Esses testes exigem Docker e são incluídos em `.\mvnw.cmd test`.
+
+## OpenAPI e Swagger UI
+
+Com a aplicação em execução:
+
+- Swagger UI: http://localhost:8080/swagger-ui.html
+- Especificação JSON: http://localhost:8080/v3/api-docs
+- Especificação YAML: http://localhost:8080/v3/api-docs.yaml
+
+A documentação usa `springdoc-openapi-starter-webmvc-ui` 3.1.1, compatível com Spring Boot
+4.1.x conforme a [matriz oficial](https://springdoc.org/#what-is-the-compatibility-matrix-of-springdoc-openapi-with-spring-boot).
+Sua versão é explícita porque essa biblioteca não é gerenciada pelo BOM do Spring Boot.
+As demais dependências continuam usando o gerenciamento de versões do projeto.
+
+O contrato descreve os três endpoints atuais, validações, campos aceitos e respostas
+de sucesso e erro. Cadastro e login são públicos; `GET /api/v1/users/me` exige
+`bearerAuth`. A especificação mostra DTOs e esconde o principal JWT injetado,
+campos calculados de validação e detalhes das entidades persistidas.
+As senhas são marcadas como `writeOnly` e o formato de erros é `application/problem+json`.
+Os exemplos usam dados fictícios e não configuram credenciais na aplicação.
+
+Para testar o fluxo no navegador:
+
+1. Execute `POST /api/v1/auth/register` com seu nome, e-mail e senha.
+2. Execute `POST /api/v1/auth/login` com essas credenciais.
+3. Copie o campo `accessToken` da resposta.
+4. Clique em **Authorize**, cole somente o token, sem o prefixo `Bearer`, e confirme.
+5. Execute `GET /api/v1/users/me`.
+
+O Swagger UI não persiste a autorização no armazenamento do navegador entre recargas.
+Para desabilitar a especificação e a interface, defina `API_DOCS_ENABLED=false` e
+reinicie a aplicação. As rotas da documentação passam a responder `404`.
+Esse ajuste não modifica o acesso aos endpoints de negócio ou ao Actuator.
+O Actuator continua expondo somente o health, sem detalhes sensíveis.
+
+Os testes abaixo verificam a geração real da especificação, os esquemas, a segurança,
+os recursos da interface e a desativação por configuração, sem exigir banco ou Docker:
+
+```powershell
+.\mvnw.cmd "-Dtest=OpenApiDocumentationTests,DisabledOpenApiDocumentationTests" test
+```

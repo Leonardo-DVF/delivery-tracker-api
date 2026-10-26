@@ -31,3 +31,13 @@ app:
     private-key: ${JWT_PRIVATE_KEY:file:./secrets/private.pem}
     public-key: ${JWT_PUBLIC_KEY:file:./secrets/public.pem}
     ttl-seconds: ${JWT_TTL_SECONDS:3600}
+springdoc:
+  api-docs:
+    enabled: ${API_DOCS_ENABLED:true}
+  swagger-ui:
+    enabled: ${API_DOCS_ENABLED:true}
+    persist-authorization: false
+    disable-swagger-default-url: true
+  paths-to-match: /api/v1/**
+  override-with-generic-response: false
+  default-produces-media-type: application/json
