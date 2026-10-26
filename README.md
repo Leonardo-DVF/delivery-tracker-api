@@ -7,6 +7,7 @@ O projeto está sendo desenvolvido em etapas pequenas, com revisão antes de cad
 
 Configuração do PostgreSQL, persistência de usuários, cadastro público, login com JWT
 e consulta do perfil autenticado, com validação, BCrypt e erros em Problem Details.
+O perfil `local` permite criar um operador de desenvolvimento com credenciais externas.
 Entregas, frete, rastreamento e integrações serão implementados nas próximas etapas.
 
 ## Tecnologias
@@ -78,6 +79,8 @@ diretamente. Nesta etapa, o Compose executa somente o PostgreSQL; a aplicação 
 | `JWT_PRIVATE_KEY` | `file:./secrets/private.pem` | Chave privada RSA em PEM PKCS#8 |
 | `JWT_PUBLIC_KEY` | `file:./secrets/public.pem` | Chave pública RSA em PEM X.509 |
 | `JWT_TTL_SECONDS` | `3600` | Validade do token, entre 60 e 86400 segundos |
+| `LOCAL_OPERATOR_EMAIL` | Não definido | E-mail do operador; usado somente no perfil `local` |
+| `LOCAL_OPERATOR_PASSWORD` | Não definida | Senha do operador; usada somente no perfil `local` |
 
 As chaves são obrigatórias ao iniciar a aplicação e precisam formar um par RSA de
 pelo menos 2048 bits. Em outros ambientes, forneça caminhos externos pelas variáveis
@@ -212,7 +215,7 @@ recebe `401`. O DTO possui os mesmos cinco campos públicos retornados no cadast
 Nesta versão, não há refresh token, revogação individual, logout no servidor ou
 rotação simultânea de múltiplas chaves. Tokens permanecem válidos até expirar;
 trocar o par de chaves e reiniciar a aplicação invalida tokens assinados pelo par antigo.
-A criação local de operadores será adicionada em uma etapa posterior.
+A criação de operadores para desenvolvimento está disponível somente no perfil `local`.
 
 Para verificar autenticação sem Docker, com assinaturas e filtros reais e repositório simulado:
 
@@ -222,3 +225,41 @@ Para verificar autenticação sem Docker, com assinaturas e filtros reais e repo
 
 `AuthenticationIntegrationTests` cobre cadastro, login e consulta do perfil com o
 PostgreSQL real do Testcontainers. Execute `.\mvnw.cmd test` com Docker para a suíte completa.
+
+## Operador no ambiente local
+
+Para criar um operador, defina `LOCAL_OPERATOR_EMAIL` e `LOCAL_OPERATOR_PASSWORD` no
+ambiente do processo ou no arquivo `.env` local. As duas linhas opcionais estão
+comentadas em `.env.example`; descomente-as somente no seu `.env` e escolha uma senha.
+Não existe senha padrão nem endpoint público para criar ou promover operadores.
+
+Inicie a aplicação com o perfil `local` pelo comando de execução documentado acima.
+Na inicialização, o `LocalOperatorBootstrap` executa uma transação que:
+
+- Não faz alterações quando as duas variáveis estão ausentes ou vazias.
+- Valida o e-mail e a senha com as mesmas regras usadas no cadastro.
+- Normaliza o e-mail e cria o usuário com perfil `OPERATOR` e hash BCrypt de custo 12.
+- Preserva um operador que já tenha o e-mail configurado, inclusive seu nome e hash.
+- Interrompe a inicialização se o e-mail pertencer a um cliente, sem promovê-lo.
+- Interrompe a inicialização se apenas uma variável for informada ou os dados forem inválidos.
+
+As mensagens de erro não incluem as credenciais fornecidas. Fora do perfil `local`,
+esse componente não é registrado, mesmo que as variáveis estejam definidas.
+Mudar a senha nas variáveis depois da criação não redefine a senha persistida;
+esta etapa não inclui recuperação ou redefinição de senha.
+Se duas instâncias locais tentarem criar o mesmo operador simultaneamente, a constraint
+única protege o banco; uma delas poderá falhar na inicialização.
+
+Depois da criação, use `POST /api/v1/auth/login` com as credenciais do operador e
+consulte `GET /api/v1/users/me` com o token. A resposta do perfil terá `role: OPERATOR`.
+O cadastro público continua criando exclusivamente clientes e rejeitando `role` na entrada.
+
+Para verificar as regras e a ativação por perfil sem Docker:
+
+```powershell
+.\mvnw.cmd "-Dtest=LocalOperatorBootstrapTests" test
+```
+
+`LocalOperatorIntegrationTests` verifica persistência, reinicialização idempotente,
+login e consulta do operador no PostgreSQL do Testcontainers, além de proteger clientes
+contra promoção. Esses testes exigem Docker e são incluídos em `.\mvnw.cmd test`.
