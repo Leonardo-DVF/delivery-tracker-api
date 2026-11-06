@@ -9,7 +9,8 @@ Configuração do PostgreSQL, persistência de usuários, cadastro público, log
 e consulta do perfil autenticado, com validação, BCrypt e erros em Problem Details.
 O perfil `local` permite criar um operador de desenvolvimento com credenciais externas.
 Os endpoints atuais têm documentação interativa OpenAPI/Swagger.
-Entregas, frete, rastreamento e integrações serão implementados nas próximas etapas.
+A cotação de frete usa tarifas fictícias por CEP e peso, calculadas pelo backend.
+Entregas, rastreamento e integrações serão implementados nas próximas etapas.
 
 ## Tecnologias
 
@@ -161,7 +162,7 @@ um conflito na persistência retorna `409`, sem detalhes internos do banco.
 
 A configuração de segurança libera o cadastro e o login por `POST` e o health por `GET`.
 As rotas da documentação também permitem consultas por `GET` sem autenticação.
-O perfil exige Bearer JWT; as demais rotas permanecem bloqueadas nesta etapa.
+O perfil e a cotação de frete exigem Bearer JWT; as demais rotas permanecem bloqueadas nesta etapa.
 Não há sessão, formulário de login
 ou autenticação Basic. O endpoint `/actuator/health` é público sem detalhes sensíveis;
 nenhum outro endpoint do Actuator é exposto.
@@ -280,8 +281,8 @@ A documentação usa `springdoc-openapi-starter-webmvc-ui` 3.1.1, compatível co
 Sua versão é explícita porque essa biblioteca não é gerenciada pelo BOM do Spring Boot.
 As demais dependências continuam usando o gerenciamento de versões do projeto.
 
-O contrato descreve os três endpoints atuais, validações, campos aceitos e respostas
-de sucesso e erro. Cadastro e login são públicos; `GET /api/v1/users/me` exige
+O contrato descreve os quatro endpoints atuais, validações, campos aceitos e respostas
+de sucesso e erro. Cadastro e login são públicos; perfil e cotação de frete exigem
 `bearerAuth`. A especificação mostra DTOs e esconde o principal JWT injetado,
 campos calculados de validação e detalhes das entidades persistidas.
 As senhas são marcadas como `writeOnly` e o formato de erros é `application/problem+json`.
@@ -306,4 +307,71 @@ os recursos da interface e a desativação por configuração, sem exigir banco 
 
 ```powershell
 .\mvnw.cmd "-Dtest=OpenApiDocumentationTests,DisabledOpenApiDocumentationTests" test
+```
+
+## Cotação de frete fictício
+
+`POST /api/v1/freight/quotes` permite cotar frete para usuários autenticados com
+perfil `CUSTOMER` ou `OPERATOR`. A entrada aceita somente `destinationPostalCode`
+(string com oito dígitos, preservando zeros iniciais) e `weightKg` (de 0.001 a 1000 kg,
+com até três casas decimais). Campos como `amount` e `status` são rejeitados com `400`.
+
+Depois de cadastrar e autenticar o usuário pelos exemplos anteriores:
+
+```powershell
+$quote = @{
+    destinationPostalCode = "01000000"
+    weightKg = 2.000
+} | ConvertTo-Json
+
+Invoke-RestMethod -Method Post -Uri "http://localhost:8080/api/v1/freight/quotes" `
+    -Headers @{ Authorization = "Bearer $($session.accessToken)" } `
+    -ContentType "application/json" -Body $quote
+```
+
+A resposta contém `amount: 15.00`, `currency: "BRL"` e um aviso de tarifa fictícia.
+Esta demonstração não representa preços reais de transportadoras.
+O serviço calcula `preço base + preço por kg × peso` usando `BigDecimal` e arredonda
+somente o resultado final para duas casas com `HALF_UP`. Por exemplo, com preço base
+10.00 e preço por kg 2.50, 0.002 kg custa 10.01. Dimensões e peso cúbico não entram
+na cotação desta versão.
+
+As faixas de CEP incluem ambos os limites. As de peso excluem o limite inferior
+e incluem o superior: `(0, 5]` e `(5, 30]` não se sobrepõem.
+O perfil `local` carrega estas quatro tarifas de demonstração pelo Flyway:
+
+| CEP inicial | CEP final | Peso em kg | Base (BRL) | Por kg (BRL) |
+| --- | --- | --- | --- | --- |
+| 00000000 | 59999999 | `(0, 5]` | 10.00 | 2.50 |
+| 00000000 | 59999999 | `(5, 30]` | 20.00 | 3.00 |
+| 60000000 | 99999999 | `(0, 5]` | 15.00 | 4.00 |
+| 60000000 | 99999999 | `(5, 30]` | 30.00 | 5.00 |
+
+Se nenhuma tarifa atender, a API retorna `422` em Problem Details. Assim, pesos acima
+de 30 kg são entradas válidas, mas não têm tarifa nas regras de demonstração.
+Uma restrição de exclusão GiST no PostgreSQL impede regras com sobreposição simultânea
+de CEP e peso, inclusive em gravações concorrentes. Faixas adjacentes são permitidas.
+Constraints também impedem faixas inválidas e preços negativos. Defensivamente,
+o serviço retorna `409` se encontrar mais de uma regra aplicável.
+
+`V2__create_freight_rates.sql` cria a tabela em todos os perfis. Somente `local`
+inclui também `db/local`, com `V3__seed_fictional_freight_rates.sql`. Fora desse perfil,
+a tabela começa vazia. Use bancos separados por ambiente: um banco migrado como
+`local` mantém a migration V3 no histórico e não deve ser reutilizado em outro perfil.
+A próxima migration global deve usar V4 ou superior, pois V3 está reservada aos dados locais.
+
+As cotações não são persistidas nem reservam preço. A criação de entregas, prevista
+para a próxima etapa, deverá recalcular e armazenar o valor aplicado.
+
+Para executar os testes de cálculo, validação e autorização sem Docker:
+
+```powershell
+.\mvnw.cmd "-Dtest=FreightServiceTests,FreightControllerTests" test
+```
+
+`FreightIntegrationTests` verifica limites das faixas, ausência de tarifa e constraints
+em PostgreSQL real via Testcontainers. Com Docker Desktop em execução:
+
+```powershell
+.\mvnw.cmd "-Dtest=FreightIntegrationTests" test
 ```

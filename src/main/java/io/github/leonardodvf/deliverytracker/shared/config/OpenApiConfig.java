@@ -47,7 +47,13 @@ public class OpenApiConfig {
                                 "detail", "Invalid email or password")))
                 .addResponses("Conflict", problemResponse("Email already registered or conflicting record",
                         Map.of("type", "about:blank", "title", "Conflict", "status", 409,
-                                "detail", "Email already registered")));
+                                "detail", "Email already registered")))
+                .addResponses("FreightUnavailable", problemResponse("No fictional tariff covers the destination and weight",
+                        Map.of("type", "about:blank", "title", "Unprocessable Content", "status", 422,
+                                "detail", "No fictional tariff available for the destination and weight")))
+                .addResponses("FreightTariffConflict", problemResponse("Ambiguous freight tariff configuration",
+                        Map.of("type", "about:blank", "title", "Conflict", "status", 409,
+                                "detail", "Multiple freight tariffs match the destination and weight")));
         return new OpenAPI()
                 .info(new Info().title("Delivery Tracker API").version("v1")
                         .description("Shipment management and tracking API. Public registration always creates a CUSTOMER."))
