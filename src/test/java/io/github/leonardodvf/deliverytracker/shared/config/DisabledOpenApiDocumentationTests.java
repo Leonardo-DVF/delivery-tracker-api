@@ -3,6 +3,7 @@ package io.github.leonardodvf.deliverytracker.shared.config;
 import io.github.leonardodvf.deliverytracker.auth.service.LoginService;
 import io.github.leonardodvf.deliverytracker.auth.service.RegistrationService;
 import io.github.leonardodvf.deliverytracker.freight.service.FreightService;
+import io.github.leonardodvf.deliverytracker.shipment.service.ShipmentService;
 import io.github.leonardodvf.deliverytracker.user.service.UserService;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -25,6 +26,7 @@ class DisabledOpenApiDocumentationTests {
     @MockitoBean private UserService users;
     @MockitoBean private JwtDecoder decoder;
     @MockitoBean private FreightService freight;
+    @MockitoBean private ShipmentService shipments;
 
     @Test
     void disablesDocumentationAndUiTogether() throws Exception {

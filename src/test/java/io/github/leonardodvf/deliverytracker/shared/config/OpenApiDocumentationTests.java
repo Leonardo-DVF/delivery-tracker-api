@@ -7,6 +7,8 @@ import io.github.leonardodvf.deliverytracker.auth.service.LoginService;
 import io.github.leonardodvf.deliverytracker.auth.service.RegistrationService;
 import io.github.leonardodvf.deliverytracker.freight.controller.FreightController;
 import io.github.leonardodvf.deliverytracker.freight.service.FreightService;
+import io.github.leonardodvf.deliverytracker.shipment.controller.ShipmentController;
+import io.github.leonardodvf.deliverytracker.shipment.service.ShipmentService;
 import io.github.leonardodvf.deliverytracker.shared.exception.ApiExceptionHandler;
 import io.github.leonardodvf.deliverytracker.user.controller.UserController;
 import io.github.leonardodvf.deliverytracker.user.service.UserService;
@@ -42,6 +44,7 @@ class OpenApiDocumentationTests {
     @MockitoBean private UserService users;
     @MockitoBean private JwtDecoder decoder;
     @MockitoBean private FreightService freight;
+    @MockitoBean private ShipmentService shipments;
 
     @Test
     void exposesOnlyCurrentApiOperationsWithoutAuthentication() throws Exception {
@@ -50,8 +53,8 @@ class OpenApiDocumentationTests {
         assertThat(spec.path("info").path("title").asText()).isEqualTo("Delivery Tracker API");
         assertThat(spec.path("paths").properties().stream().map(Map.Entry::getKey).toList())
                 .containsExactlyInAnyOrder("/api/v1/auth/register", "/api/v1/auth/login", "/api/v1/users/me",
-                        "/api/v1/freight/quotes");
-        verifyNoInteractions(registration, login, users, decoder, freight);
+                        "/api/v1/freight/quotes", "/api/v1/shipments");
+        verifyNoInteractions(registration, login, users, decoder, freight, shipments);
     }
 
     @Test
@@ -68,6 +71,8 @@ class OpenApiDocumentationTests {
         assertThat(spec.at("/paths/~1api~1v1~1users~1me/get/security/0").has("bearerAuth")).isTrue();
         assertThat(spec.at("/paths/~1api~1v1~1freight~1quotes/post/security/0").has("bearerAuth")).isTrue();
         assertThat(spec.at("/paths/~1api~1v1~1users~1me/get/parameters").size()).isZero();
+        assertThat(spec.at("/paths/~1api~1v1~1shipments/post/security/0").has("bearerAuth")).isTrue();
+        assertThat(spec.at("/paths/~1api~1v1~1shipments/post/parameters").size()).isZero();
     }
 
     @Test
@@ -89,6 +94,8 @@ class OpenApiDocumentationTests {
         assertThat(registrationSchema.at("/properties/name/maxLength").asInt()).isEqualTo(100);
         assertThat(registrationSchema.path("required").size()).isEqualTo(3);
         assertThat(schemas.path("FreightQuoteRequest").path("properties").size()).isEqualTo(2);
+        assertThat(schemas.path("CreateShipmentRequest").path("properties").size()).isEqualTo(6);
+        assertThat(schemas.has("Shipment")).isFalse();
     }
 
     @Test
@@ -152,7 +159,7 @@ class OpenApiDocumentationTests {
             "org.springframework.boot.flyway.autoconfigure.FlywayAutoConfiguration"
     })
     @Import({OpenApiConfig.class, SecurityConfig.class, ApiExceptionHandler.class,
-            RegistrationController.class, LoginController.class, UserController.class, FreightController.class})
+            RegistrationController.class, LoginController.class, UserController.class, FreightController.class, ShipmentController.class})
     static class TestApplication {
     }
 }

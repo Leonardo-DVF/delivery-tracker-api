@@ -10,7 +10,8 @@ e consulta do perfil autenticado, com validação, BCrypt e erros em Problem Det
 O perfil `local` permite criar um operador de desenvolvimento com credenciais externas.
 Os endpoints atuais têm documentação interativa OpenAPI/Swagger.
 A cotação de frete usa tarifas fictícias por CEP e peso, calculadas pelo backend.
-Entregas, rastreamento e integrações serão implementados nas próximas etapas.
+Clientes já podem criar entregas com frete calculado e evento inicial de rastreamento.
+Consultas, cancelamento, evolução do rastreamento e integrações virão nas próximas etapas.
 
 ## Tecnologias
 
@@ -162,7 +163,7 @@ um conflito na persistência retorna `409`, sem detalhes internos do banco.
 
 A configuração de segurança libera o cadastro e o login por `POST` e o health por `GET`.
 As rotas da documentação também permitem consultas por `GET` sem autenticação.
-O perfil e a cotação de frete exigem Bearer JWT; as demais rotas permanecem bloqueadas nesta etapa.
+O perfil, a cotação e a criação de entregas exigem Bearer JWT; as demais rotas permanecem bloqueadas nesta etapa.
 Não há sessão, formulário de login
 ou autenticação Basic. O endpoint `/actuator/health` é público sem detalhes sensíveis;
 nenhum outro endpoint do Actuator é exposto.
@@ -281,8 +282,8 @@ A documentação usa `springdoc-openapi-starter-webmvc-ui` 3.1.1, compatível co
 Sua versão é explícita porque essa biblioteca não é gerenciada pelo BOM do Spring Boot.
 As demais dependências continuam usando o gerenciamento de versões do projeto.
 
-O contrato descreve os quatro endpoints atuais, validações, campos aceitos e respostas
-de sucesso e erro. Cadastro e login são públicos; perfil e cotação de frete exigem
+O contrato descreve os cinco endpoints atuais, validações, campos aceitos e respostas
+de sucesso e erro. Cadastro e login são públicos; perfil, cotação e criação de entregas exigem
 `bearerAuth`. A especificação mostra DTOs e esconde o principal JWT injetado,
 campos calculados de validação e detalhes das entidades persistidas.
 As senhas são marcadas como `writeOnly` e o formato de erros é `application/problem+json`.
@@ -358,10 +359,10 @@ o serviço retorna `409` se encontrar mais de uma regra aplicável.
 inclui também `db/local`, com `V3__seed_fictional_freight_rates.sql`. Fora desse perfil,
 a tabela começa vazia. Use bancos separados por ambiente: um banco migrado como
 `local` mantém a migration V3 no histórico e não deve ser reutilizado em outro perfil.
-A próxima migration global deve usar V4 ou superior, pois V3 está reservada aos dados locais.
+V4 cria as entregas e eventos; V3 está reservada aos dados locais.
 
-As cotações não são persistidas nem reservam preço. A criação de entregas, prevista
-para a próxima etapa, deverá recalcular e armazenar o valor aplicado.
+As cotações não são persistidas nem reservam preço. A criação de entregas recalcula
+e armazena o valor aplicado, sem depender de uma cotação anterior.
 
 Para executar os testes de cálculo, validação e autorização sem Docker:
 
@@ -374,4 +375,89 @@ em PostgreSQL real via Testcontainers. Com Docker Desktop em execução:
 
 ```powershell
 .\mvnw.cmd "-Dtest=FreightIntegrationTests" test
+```
+
+## Criação de entregas
+
+`POST /api/v1/shipments` está disponível somente para `CUSTOMER`. O proprietário é
+obtido do `sub` do JWT e confirmado no banco, independentemente dos nomes dos contatos.
+Operadores recebem `403`; tokens ausentes ou usuários removidos recebem `401`.
+O JSON aceita somente origem, destino, peso e dimensões. Informar proprietário,
+preço, status ou código de rastreamento gera `400`.
+
+Na mesma sessão PowerShell dos exemplos de cadastro, login e cotação:
+
+```powershell
+$shipmentRequest = @{
+    origin = @{
+        contactName = "Sender"
+        postalCode = "20000000"
+        street = "Origin street"
+        number = "10"
+        neighborhood = "Center"
+        city = "Rio de Janeiro"
+        state = "RJ"
+    }
+    destination = @{
+        contactName = "Recipient"
+        postalCode = "01000000"
+        street = "Destination street"
+        number = "20"
+        complement = "Apt 1"
+        neighborhood = "Center"
+        city = "Sao Paulo"
+        state = "SP"
+    }
+    weightKg = 2
+    lengthCm = 30
+    widthCm = 20
+    heightCm = 10
+} | ConvertTo-Json -Depth 4
+
+$shipment = Invoke-RestMethod -Method Post -Uri "http://localhost:8080/api/v1/shipments" `
+    -Headers @{ Authorization = "Bearer $($session.accessToken)" } `
+    -ContentType "application/json" -Body $shipmentRequest
+$shipment
+```
+
+A resposta `201` contém UUID, código de rastreamento, endereços, medidas, frete,
+status `CREATED` e instantes de criação e atualização em ISO 8601. Neste exemplo,
+o frete é 15.00 BRL. O contato da origem representa o remetente e o do destino
+representa o destinatário, sem exigir telefone ou documento.
+
+Os dois endereços exigem nome do contato, CEP de oito dígitos, logradouro, número,
+bairro, cidade e UF brasileira em maiúsculas. Complemento é opcional. Nome, bairro e
+cidade aceitam até 100 caracteres, logradouro 150, número 20 e complemento 100.
+Espaços nas extremidades dos textos são removidos ao armazenar os endereços.
+Peso segue os limites da cotação (0.001 a 1000 kg, até três casas decimais).
+Cada dimensão aceita 0.01 a 1000 cm com até duas casas. Não há cálculo de peso cúbico.
+Sem tarifa para o destino e peso, a criação retorna `422` sem persistir uma entrega.
+
+O serviço recalcula o frete no momento da criação e salva o valor na própria entrega.
+Alterar ou remover tarifas posteriormente não altera esse histórico. Uma transação
+salva a entrega e seu evento inicial `CREATED`, com origem `API`, sem localização
+e com instantes de ocorrência e recebimento iguais ao da criação.
+Falhas ao persistir o evento também revertem a entrega.
+
+O código de rastreamento usa um UUID aleatório independente, representado por
+32 caracteres hexadecimais maiúsculos, com unicidade garantida no PostgreSQL.
+Uma colisão gera `409` e reverte a transação; não há tentativa automática nesta etapa.
+A entidade possui `@Version` para as futuras atualizações concorrentes.
+A migration V4 inclui chaves estrangeiras, constraints de endereços e medidas,
+e índices para consultas futuras por proprietário, status e histórico.
+
+Consultas privadas, paginação, cancelamento e consulta pública serão implementados
+nas próximas etapas. Nenhum endpoint de leitura de entregas está liberado ainda.
+O evento inicial é persistido, mas envio de e-mail será incluído na etapa de notificações.
+
+Para verificar criação, validação, autorização e regras do serviço sem Docker:
+
+```powershell
+.\mvnw.cmd "-Dtest=ShipmentServiceTests,ShipmentControllerTests,OpenApiDocumentationTests,DisabledOpenApiDocumentationTests" test
+```
+
+Com Docker em execução, verifique também a persistência real e o histórico do frete:
+
+```powershell
+.\mvnw.cmd "-Dtest=ShipmentIntegrationTests" test
 ```
