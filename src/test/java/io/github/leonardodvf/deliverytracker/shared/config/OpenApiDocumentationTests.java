@@ -53,7 +53,7 @@ class OpenApiDocumentationTests {
         assertThat(spec.path("info").path("title").asText()).isEqualTo("Delivery Tracker API");
         assertThat(spec.path("paths").properties().stream().map(Map.Entry::getKey).toList())
                 .containsExactlyInAnyOrder("/api/v1/auth/register", "/api/v1/auth/login", "/api/v1/users/me",
-                        "/api/v1/freight/quotes", "/api/v1/shipments");
+                        "/api/v1/freight/quotes", "/api/v1/shipments", "/api/v1/shipments/{id}");
         verifyNoInteractions(registration, login, users, decoder, freight, shipments);
     }
 
@@ -133,6 +133,11 @@ class OpenApiDocumentationTests {
         assertThat(createShipment.at("/422/$ref").asText()).isEqualTo("#/components/responses/FreightQuoteUnusable");
         assertThat(spec.at("/components/schemas/CreateShipmentRequest/properties/quoteId/format").asText()).isEqualTo("uuid");
         assertThat(spec.at("/components/schemas/CreateShipmentRequest/properties").has("weightKg")).isFalse();
+        assertThat(spec.at("/paths/~1api~1v1~1shipments/get/security/0").has("bearerAuth")).isTrue();
+        assertThat(spec.at("/paths/~1api~1v1~1shipments/get/parameters").findValuesAsString("name"))
+                .containsExactlyInAnyOrder("status", "page", "size");
+        assertThat(spec.at("/paths/~1api~1v1~1shipments~1{id}/get/responses/404/$ref").asText())
+                .isEqualTo("#/components/responses/ShipmentNotFound");
     }
 
     @Test

@@ -2,12 +2,14 @@ package io.github.leonardodvf.deliverytracker.shipment.service;
 
 import io.github.leonardodvf.deliverytracker.freight.entity.FreightQuote;
 import io.github.leonardodvf.deliverytracker.freight.repository.FreightQuoteRepository;
+import io.github.leonardodvf.deliverytracker.shipment.dto.ShipmentResponse;
 import io.github.leonardodvf.deliverytracker.shipment.entity.Shipment;
 import io.github.leonardodvf.deliverytracker.shipment.entity.ShipmentStatus;
 import io.github.leonardodvf.deliverytracker.shipment.exception.DestinationMismatchException;
 import io.github.leonardodvf.deliverytracker.shipment.exception.FreightQuoteAlreadyUsedException;
 import io.github.leonardodvf.deliverytracker.shipment.exception.FreightQuoteExpiredException;
 import io.github.leonardodvf.deliverytracker.shipment.exception.FreightQuoteNotFoundException;
+import io.github.leonardodvf.deliverytracker.shipment.exception.ShipmentNotFoundException;
 import io.github.leonardodvf.deliverytracker.shipment.repository.ShipmentRepository;
 import io.github.leonardodvf.deliverytracker.tracking.entity.TrackingEvent;
 import io.github.leonardodvf.deliverytracker.tracking.repository.TrackingEventRepository;
@@ -17,11 +19,16 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageImpl;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
 import org.springframework.web.server.ResponseStatusException;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -161,5 +168,87 @@ class ShipmentServiceTests {
         assertThatThrownBy(() -> service.create(customer.getId(), request(quote.getId())))
                 .isInstanceOf(DataIntegrityViolationException.class);
         verifyNoInteractions(events);
+    }
+
+    @Test
+    void customerListIsAlwaysScopedToTheirOwnShipmentsNewestFirst() {
+        var expected = PageRequest.of(2, 5, ShipmentService.NEWEST_FIRST);
+        var stored = shipment();
+        when(shipments.findByCustomerId(customer.getId(), expected))
+                .thenReturn(new PageImpl<>(List.of(stored), expected, 11));
+
+        var page = service.list(customer.getId(), null, 2, 5);
+
+        assertThat(page.content()).extracting(ShipmentResponse::id).containsExactly(stored.getId());
+        assertThat(page.page()).isEqualTo(2);
+        assertThat(page.size()).isEqualTo(5);
+        assertThat(page.totalElements()).isEqualTo(11);
+        assertThat(page.totalPages()).isEqualTo(3);
+        verify(shipments, never()).findAll(any(Pageable.class));
+        verify(shipments, never()).findByStatus(any(), any());
+    }
+
+    @Test
+    void customerStatusFilterStaysScopedToTheCustomer() {
+        var expected = PageRequest.of(0, 20, ShipmentService.NEWEST_FIRST);
+        when(shipments.findByCustomerIdAndStatus(customer.getId(), ShipmentStatus.CREATED, expected))
+                .thenReturn(Page.empty(expected));
+
+        service.list(customer.getId(), ShipmentStatus.CREATED, 0, 20);
+
+        verify(shipments).findByCustomerIdAndStatus(customer.getId(), ShipmentStatus.CREATED, expected);
+        verify(shipments, never()).findByStatus(any(), any());
+    }
+
+    @Test
+    void operatorListsAllShipmentsWithOrWithoutStatusFilter() {
+        var operator = new User("Operator", "operator@example.test", "hash", UserRole.OPERATOR);
+        when(users.findById(operator.getId())).thenReturn(Optional.of(operator));
+        var expected = PageRequest.of(0, 20, ShipmentService.NEWEST_FIRST);
+        when(shipments.findAll(expected)).thenReturn(Page.empty(expected));
+        when(shipments.findByStatus(ShipmentStatus.CREATED, expected)).thenReturn(Page.empty(expected));
+
+        service.list(operator.getId(), null, 0, 20);
+        service.list(operator.getId(), ShipmentStatus.CREATED, 0, 20);
+
+        verify(shipments).findAll(expected);
+        verify(shipments).findByStatus(ShipmentStatus.CREATED, expected);
+        verify(shipments, never()).findByCustomerId(any(), any());
+    }
+
+    @Test
+    void customerCannotReadAnotherCustomersShipment() {
+        var id = UUID.randomUUID();
+        when(shipments.findByIdAndCustomerId(id, customer.getId())).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.get(customer.getId(), id)).isInstanceOf(ShipmentNotFoundException.class)
+                .extracting(ex -> ((ShipmentNotFoundException) ex).getStatusCode().value()).isEqualTo(404);
+        verify(shipments, never()).findById(any());
+    }
+
+    @Test
+    void customerReadsOwnShipmentAndOperatorReadsAny() {
+        var stored = shipment();
+        when(shipments.findByIdAndCustomerId(stored.getId(), customer.getId())).thenReturn(Optional.of(stored));
+        var operator = new User("Operator", "operator@example.test", "hash", UserRole.OPERATOR);
+        when(users.findById(operator.getId())).thenReturn(Optional.of(operator));
+        when(shipments.findById(stored.getId())).thenReturn(Optional.of(stored));
+
+        assertThat(service.get(customer.getId(), stored.getId()).id()).isEqualTo(stored.getId());
+        assertThat(service.get(operator.getId(), stored.getId()).id()).isEqualTo(stored.getId());
+    }
+
+    @Test
+    void queriesRejectDeletedUsers() {
+        var unknown = UUID.randomUUID();
+        assertThatThrownBy(() -> service.list(unknown, null, 0, 20)).isInstanceOf(ResponseStatusException.class);
+        assertThatThrownBy(() -> service.get(unknown, UUID.randomUUID())).isInstanceOf(ResponseStatusException.class);
+        verifyNoInteractions(shipments);
+    }
+
+    private Shipment shipment() {
+        var input = request(quote.getId());
+        return new Shipment(customer, quote, input.origin().toAddress(), input.destination().toAddress(),
+                input.lengthCm(), input.widthCm(), input.heightCm(), now);
     }
 }

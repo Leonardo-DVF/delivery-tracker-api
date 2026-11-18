@@ -62,7 +62,10 @@ public class OpenApiConfig {
                                 "detail", "Freight quote has already been used for a shipment")))
                 .addResponses("FreightQuoteUnusable", problemResponse("Quote expired or destination differs from the quote",
                         Map.of("type", "about:blank", "title", "Unprocessable Content", "status", 422,
-                                "detail", "Freight quote has expired; request a new quote")));
+                                "detail", "Freight quote has expired; request a new quote")))
+                .addResponses("ShipmentNotFound", problemResponse("Shipment does not exist or belongs to another customer",
+                        Map.of("type", "about:blank", "title", "Not Found", "status", 404,
+                                "detail", "Shipment not found")));
         return new OpenAPI()
                 .info(new Info().title("Delivery Tracker API").version("v1")
                         .description("Shipment management and tracking API. Public registration always creates a CUSTOMER."))
