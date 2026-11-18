@@ -1,5 +1,5 @@
 package io.github.leonardodvf.deliverytracker.shipment.entity;
 
 public enum ShipmentStatus {
-    CREATED, POSTED, IN_TRANSIT, OUT_FOR_DELIVERY, DELIVERY_ATTEMPT_FAILED, DELIVERED, RETURNED, CANCELED
+    CREATED, PICKED_UP, IN_TRANSIT, OUT_FOR_DELIVERY, DELIVERED, CANCELED
 }

@@ -1,5 +1,6 @@
 package io.github.leonardodvf.deliverytracker.shipment.entity;
 
+import io.github.leonardodvf.deliverytracker.freight.entity.FreightQuote;
 import io.github.leonardodvf.deliverytracker.user.entity.User;
 import jakarta.persistence.*;
 import lombok.AccessLevel;
@@ -20,6 +21,9 @@ public class Shipment {
     @ManyToOne(fetch = FetchType.LAZY, optional = false)
     @JoinColumn(name = "customer_id", nullable = false, updatable = false)
     private User customer;
+    @OneToOne(fetch = FetchType.LAZY, optional = false)
+    @JoinColumn(name = "quote_id", nullable = false, unique = true, updatable = false)
+    private FreightQuote quote;
     @Column(nullable = false, unique = true, updatable = false, length = 32)
     private String trackingCode;
     @Embedded
@@ -66,20 +70,21 @@ public class Shipment {
     @Version
     private long version;
 
-    public Shipment(User customer, Address origin, Address destination, BigDecimal weightKg,
-            BigDecimal lengthCm, BigDecimal widthCm, BigDecimal heightCm, BigDecimal freightAmount) {
+    public Shipment(User customer, FreightQuote quote, Address origin, Address destination,
+            BigDecimal lengthCm, BigDecimal widthCm, BigDecimal heightCm, Instant createdAt) {
         this.id = UUID.randomUUID();
         this.trackingCode = UUID.randomUUID().toString().replace("-", "").toUpperCase(java.util.Locale.ROOT);
         this.customer = customer;
+        this.quote = quote;
         this.origin = origin;
         this.destination = destination;
-        this.weightKg = weightKg;
+        this.weightKg = quote.getWeightKg();
         this.lengthCm = lengthCm;
         this.widthCm = widthCm;
         this.heightCm = heightCm;
-        this.freightAmount = freightAmount;
+        this.freightAmount = quote.getAmount();
         this.status = ShipmentStatus.CREATED;
-        this.createdAt = Instant.now();
+        this.createdAt = createdAt;
         this.updatedAt = createdAt;
     }
 }

@@ -53,7 +53,16 @@ public class OpenApiConfig {
                                 "detail", "No fictional tariff available for the destination and weight")))
                 .addResponses("FreightTariffConflict", problemResponse("Ambiguous freight tariff configuration",
                         Map.of("type", "about:blank", "title", "Conflict", "status", 409,
-                                "detail", "Multiple freight tariffs match the destination and weight")));
+                                "detail", "Multiple freight tariffs match the destination and weight")))
+                .addResponses("FreightQuoteNotFound", problemResponse("Quote does not exist or belongs to another user",
+                        Map.of("type", "about:blank", "title", "Not Found", "status", 404,
+                                "detail", "Freight quote not found")))
+                .addResponses("FreightQuoteAlreadyUsed", problemResponse("Quote was already used by another shipment",
+                        Map.of("type", "about:blank", "title", "Conflict", "status", 409,
+                                "detail", "Freight quote has already been used for a shipment")))
+                .addResponses("FreightQuoteUnusable", problemResponse("Quote expired or destination differs from the quote",
+                        Map.of("type", "about:blank", "title", "Unprocessable Content", "status", 422,
+                                "detail", "Freight quote has expired; request a new quote")));
         return new OpenAPI()
                 .info(new Info().title("Delivery Tracker API").version("v1")
                         .description("Shipment management and tracking API. Public registration always creates a CUSTOMER."))

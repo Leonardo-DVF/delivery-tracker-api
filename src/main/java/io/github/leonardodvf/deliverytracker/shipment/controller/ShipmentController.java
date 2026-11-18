@@ -27,14 +27,18 @@ public class ShipmentController {
 
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)
-    @Operation(summary = "Create a shipment", description = "CUSTOMER only. Ownership, tracking code, freight and initial status are assigned by the server.")
+    @Operation(summary = "Create a shipment from a freight quote",
+            description = "CUSTOMER only. The quote must belong to the caller, be unexpired, unused and match the destination "
+                    + "postal code. Weight and freight amount are copied from the quote; ownership, tracking code and "
+                    + "initial status are assigned by the server.")
     @ApiResponses({
         @ApiResponse(responseCode = "201", description = "Shipment and initial event created atomically"),
         @ApiResponse(responseCode = "400", ref = "#/components/responses/BadRequest"),
         @ApiResponse(responseCode = "401", ref = "#/components/responses/Unauthorized"),
         @ApiResponse(responseCode = "403", description = "Only customers can create shipments"),
-        @ApiResponse(responseCode = "409", ref = "#/components/responses/Conflict"),
-        @ApiResponse(responseCode = "422", ref = "#/components/responses/FreightUnavailable")
+        @ApiResponse(responseCode = "404", ref = "#/components/responses/FreightQuoteNotFound"),
+        @ApiResponse(responseCode = "409", ref = "#/components/responses/FreightQuoteAlreadyUsed"),
+        @ApiResponse(responseCode = "422", ref = "#/components/responses/FreightQuoteUnusable")
     })
     public ShipmentResponse create(@Parameter(hidden = true) @AuthenticationPrincipal Jwt jwt,
             @Valid @RequestBody CreateShipmentRequest request) {

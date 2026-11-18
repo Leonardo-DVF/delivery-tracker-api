@@ -127,6 +127,12 @@ class OpenApiDocumentationTests {
         assertThat(spec.at("/paths/~1api~1v1~1freight~1quotes/post/responses/201/content/application~1json/schema/$ref").asText())
                 .endsWith("/FreightQuoteResponse");
         assertThat(spec.at("/paths/~1api~1v1~1freight~1quotes/post/responses").has("200")).isFalse();
+        var createShipment = spec.at("/paths/~1api~1v1~1shipments/post/responses");
+        assertThat(createShipment.at("/404/$ref").asText()).isEqualTo("#/components/responses/FreightQuoteNotFound");
+        assertThat(createShipment.at("/409/$ref").asText()).isEqualTo("#/components/responses/FreightQuoteAlreadyUsed");
+        assertThat(createShipment.at("/422/$ref").asText()).isEqualTo("#/components/responses/FreightQuoteUnusable");
+        assertThat(spec.at("/components/schemas/CreateShipmentRequest/properties/quoteId/format").asText()).isEqualTo("uuid");
+        assertThat(spec.at("/components/schemas/CreateShipmentRequest/properties").has("weightKg")).isFalse();
     }
 
     @Test

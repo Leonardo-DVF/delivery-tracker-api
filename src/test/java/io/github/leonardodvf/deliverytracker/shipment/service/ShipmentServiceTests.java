@@ -1,9 +1,13 @@
 package io.github.leonardodvf.deliverytracker.shipment.service;
 
-import io.github.leonardodvf.deliverytracker.freight.exception.FreightRateUnavailableException;
-import io.github.leonardodvf.deliverytracker.freight.service.FreightService;
+import io.github.leonardodvf.deliverytracker.freight.entity.FreightQuote;
+import io.github.leonardodvf.deliverytracker.freight.repository.FreightQuoteRepository;
 import io.github.leonardodvf.deliverytracker.shipment.entity.Shipment;
 import io.github.leonardodvf.deliverytracker.shipment.entity.ShipmentStatus;
+import io.github.leonardodvf.deliverytracker.shipment.exception.DestinationMismatchException;
+import io.github.leonardodvf.deliverytracker.shipment.exception.FreightQuoteAlreadyUsedException;
+import io.github.leonardodvf.deliverytracker.shipment.exception.FreightQuoteExpiredException;
+import io.github.leonardodvf.deliverytracker.shipment.exception.FreightQuoteNotFoundException;
 import io.github.leonardodvf.deliverytracker.shipment.repository.ShipmentRepository;
 import io.github.leonardodvf.deliverytracker.tracking.entity.TrackingEvent;
 import io.github.leonardodvf.deliverytracker.tracking.repository.TrackingEventRepository;
@@ -12,60 +16,71 @@ import io.github.leonardodvf.deliverytracker.user.repository.UserRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.web.server.ResponseStatusException;
-import java.math.BigDecimal;
+import java.time.Clock;
+import java.time.Duration;
+import java.time.Instant;
+import java.time.ZoneOffset;
 import java.util.Optional;
 import java.util.UUID;
 
-import static io.github.leonardodvf.deliverytracker.shipment.ShipmentTestData.request;
+import static io.github.leonardodvf.deliverytracker.shipment.ShipmentTestData.*;
 import static org.assertj.core.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
 class ShipmentServiceTests {
 
+    private final Instant now = QUOTED_AT.plus(Duration.ofMinutes(10));
     private final UserRepository users = mock(UserRepository.class);
-    private final FreightService freight = mock(FreightService.class);
+    private final FreightQuoteRepository quotes = mock(FreightQuoteRepository.class);
     private final ShipmentRepository shipments = mock(ShipmentRepository.class);
     private final TrackingEventRepository events = mock(TrackingEventRepository.class);
-    private final ShipmentService service = new ShipmentService(users, freight, shipments, events);
+    private final ShipmentService service = new ShipmentService(users, quotes, shipments, events,
+            Clock.fixed(now, ZoneOffset.UTC));
     private final User customer = new User("Owner", "owner@example.test", "hash", UserRole.CUSTOMER);
+    private final FreightQuote quote = quote(customer);
 
     @BeforeEach
     void setup() {
         when(users.findById(customer.getId())).thenReturn(Optional.of(customer));
+        when(quotes.findById(quote.getId())).thenReturn(Optional.of(quote));
     }
 
     @Test
-    void assignsAuthenticatedOwnerAndStoresBackendPriceWithInitialEvent() {
-        when(freight.calculateAmount("01000000", new BigDecimal("2"))).thenReturn(new BigDecimal("15.00"));
-
-        var result = service.create(customer.getId(), request());
+    void copiesWeightAndPriceFromQuoteAndStoresInitialEvent() {
+        var result = service.create(customer.getId(), request(quote.getId()));
 
         var saved = ArgumentCaptor.forClass(Shipment.class);
         verify(shipments).saveAndFlush(saved.capture());
         var event = ArgumentCaptor.forClass(TrackingEvent.class);
         verify(events).save(event.capture());
         assertThat(saved.getValue().getCustomer()).isSameAs(customer);
+        assertThat(saved.getValue().getQuote()).isSameAs(quote);
+        assertThat(result.quoteId()).isEqualTo(quote.getId());
+        assertThat(result.weightKg()).isEqualByComparingTo("2.000");
+        assertThat(result.freightAmount()).isEqualByComparingTo("15.00");
+        assertThat(result.lengthCm()).isEqualByComparingTo("30");
         assertThat(result.origin().contactName()).isEqualTo("Sender");
         assertThat(result.destination().contactName()).isEqualTo("Recipient");
-        assertThat(result.freightAmount()).isEqualByComparingTo("15.00");
         assertThat(result.status()).isEqualTo(ShipmentStatus.CREATED);
         assertThat(result.trackingCode()).matches("[0-9A-F]{32}");
-        assertThat(result.updatedAt()).isEqualTo(result.createdAt());
+        assertThat(result.createdAt()).isEqualTo(now);
+        assertThat(result.updatedAt()).isEqualTo(now);
         assertThat(event.getValue().getShipment()).isSameAs(saved.getValue());
         assertThat(event.getValue().getStatus()).isEqualTo(ShipmentStatus.CREATED);
-        assertThat(event.getValue().getOccurredAt()).isEqualTo(result.createdAt());
-        assertThat(event.getValue().getReceivedAt()).isEqualTo(result.createdAt());
+        assertThat(event.getValue().getOccurredAt()).isEqualTo(now);
+        assertThat(event.getValue().getReceivedAt()).isEqualTo(now);
         assertThat(event.getValue().getSource()).isEqualTo("API");
         assertThat(event.getValue().getLocation()).isNull();
     }
 
     @Test
-    void rejectsDeletedUserBeforeCalculatingOrWriting() {
-        assertThatThrownBy(() -> service.create(UUID.randomUUID(), request()))
+    void rejectsDeletedUserBeforeReadingQuoteOrWriting() {
+        assertThatThrownBy(() -> service.create(UUID.randomUUID(), request(quote.getId())))
                 .isInstanceOf(ResponseStatusException.class)
                 .extracting(ex -> ((ResponseStatusException) ex).getStatusCode().value()).isEqualTo(401);
-        verifyNoInteractions(freight, shipments, events);
+        verifyNoInteractions(quotes, shipments, events);
     }
 
     @Test
@@ -73,39 +88,78 @@ class ShipmentServiceTests {
         var operator = new User("Operator", "operator@example.test", "hash", UserRole.OPERATOR);
         when(users.findById(operator.getId())).thenReturn(Optional.of(operator));
 
-        assertThatThrownBy(() -> service.create(operator.getId(), request()))
+        assertThatThrownBy(() -> service.create(operator.getId(), request(quote.getId())))
                 .isInstanceOf(ResponseStatusException.class)
                 .extracting(ex -> ((ResponseStatusException) ex).getStatusCode().value()).isEqualTo(403);
-        verifyNoInteractions(freight, shipments, events);
+        verifyNoInteractions(quotes, shipments, events);
     }
 
     @Test
-    void doesNotSaveAnythingWhenTariffIsUnavailable() {
-        when(freight.calculateAmount(anyString(), any())).thenThrow(new FreightRateUnavailableException());
-
-        assertThatThrownBy(() -> service.create(customer.getId(), request()))
-                .isInstanceOf(FreightRateUnavailableException.class);
+    void reportsUnknownQuoteAsNotFound() {
+        assertThatThrownBy(() -> service.create(customer.getId(), request(UUID.randomUUID())))
+                .isInstanceOf(FreightQuoteNotFoundException.class);
         verifyNoInteractions(shipments, events);
     }
 
     @Test
-    void doesNotCreateAnEventWhenShipmentPersistenceFails() {
-        when(freight.calculateAmount(anyString(), any())).thenReturn(new BigDecimal("15.00"));
-        when(shipments.saveAndFlush(any())).thenThrow(new org.springframework.dao.DataIntegrityViolationException("conflict"));
+    void reportsQuoteOfAnotherUserAsNotFoundToAvoidRevealingIt() {
+        var other = new User("Other", "other@example.test", "hash", UserRole.CUSTOMER);
+        var foreign = quote(other);
+        when(quotes.findById(foreign.getId())).thenReturn(Optional.of(foreign));
 
-        assertThatThrownBy(() -> service.create(customer.getId(), request()))
-                .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
+        assertThatThrownBy(() -> service.create(customer.getId(), request(foreign.getId())))
+                .isInstanceOf(FreightQuoteNotFoundException.class);
+        verifyNoInteractions(shipments, events);
+    }
+
+    @Test
+    void rejectsQuoteAtItsExactExpirationInstant() {
+        var expiring = quote(customer, "01000000", now.minus(Duration.ofMinutes(30)));
+        when(quotes.findById(expiring.getId())).thenReturn(Optional.of(expiring));
+
+        assertThatThrownBy(() -> service.create(customer.getId(), request(expiring.getId())))
+                .isInstanceOf(FreightQuoteExpiredException.class)
+                .extracting(ex -> ((FreightQuoteExpiredException) ex).getStatusCode().value()).isEqualTo(422);
+        verifyNoInteractions(shipments, events);
+    }
+
+    @Test
+    void acceptsQuoteOneNanosecondBeforeExpiration() {
+        var almostExpired = quote(customer, "01000000", now.minus(Duration.ofMinutes(30)).plusNanos(1));
+        when(quotes.findById(almostExpired.getId())).thenReturn(Optional.of(almostExpired));
+
+        assertThat(service.create(customer.getId(), request(almostExpired.getId())).quoteId())
+                .isEqualTo(almostExpired.getId());
+    }
+
+    @Test
+    void rejectsDestinationDifferentFromTheQuotedPostalCode() {
+        var elsewhere = quote(customer, "60000000", QUOTED_AT);
+        when(quotes.findById(elsewhere.getId())).thenReturn(Optional.of(elsewhere));
+
+        assertThatThrownBy(() -> service.create(customer.getId(), request(elsewhere.getId())))
+                .isInstanceOf(DestinationMismatchException.class)
+                .extracting(ex -> ((DestinationMismatchException) ex).getStatusCode().value()).isEqualTo(422);
+        verifyNoInteractions(shipments, events);
+    }
+
+    @Test
+    void rejectsQuoteThatAlreadyBackedAShipment() {
+        when(shipments.existsByQuoteId(quote.getId())).thenReturn(true);
+
+        assertThatThrownBy(() -> service.create(customer.getId(), request(quote.getId())))
+                .isInstanceOf(FreightQuoteAlreadyUsedException.class)
+                .extracting(ex -> ((FreightQuoteAlreadyUsedException) ex).getStatusCode().value()).isEqualTo(409);
+        verify(shipments, never()).saveAndFlush(any());
         verifyNoInteractions(events);
     }
 
     @Test
-    void generatesDifferentTrackingCodesForDifferentShipments() {
-        when(freight.calculateAmount(anyString(), any())).thenReturn(new BigDecimal("15.00"));
+    void doesNotCreateAnEventWhenShipmentPersistenceFails() {
+        when(shipments.saveAndFlush(any())).thenThrow(new DataIntegrityViolationException("conflict"));
 
-        var first = service.create(customer.getId(), request());
-        var second = service.create(customer.getId(), request());
-
-        assertThat(first.trackingCode()).isNotEqualTo(second.trackingCode());
-        assertThat(first.id()).isNotEqualTo(second.id());
+        assertThatThrownBy(() -> service.create(customer.getId(), request(quote.getId())))
+                .isInstanceOf(DataIntegrityViolationException.class);
+        verifyNoInteractions(events);
     }
 }
