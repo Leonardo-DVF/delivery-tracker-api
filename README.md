@@ -9,9 +9,11 @@ Configuração do PostgreSQL, persistência de usuários, cadastro público, log
 e consulta do perfil autenticado, com validação, BCrypt e erros em Problem Details.
 O perfil `local` permite criar um operador de desenvolvimento com credenciais externas.
 Os endpoints atuais têm documentação interativa OpenAPI/Swagger.
-A cotação de frete usa tarifas fictícias por CEP e peso, calculadas pelo backend.
-Clientes já podem criar entregas com frete calculado e evento inicial de rastreamento.
-Consultas, cancelamento, evolução do rastreamento e integrações virão nas próximas etapas.
+A cotação de frete usa tarifas fictícias por CEP e peso, calculadas pelo backend,
+e fica armazenada com validade para travar o preço.
+Clientes criam entregas a partir de uma cotação, com código de rastreamento único e
+evento inicial; cada cliente consulta só as próprias entregas e operadores consultam todas.
+Ciclo de vida, rastreamento público, webhooks e notificações virão nas próximas etapas.
 
 ## Tecnologias
 
@@ -85,6 +87,7 @@ diretamente. Nesta etapa, o Compose executa somente o PostgreSQL; a aplicação 
 | `LOCAL_OPERATOR_EMAIL` | Não definido | E-mail do operador; usado somente no perfil `local` |
 | `LOCAL_OPERATOR_PASSWORD` | Não definida | Senha do operador; usada somente no perfil `local` |
 | `API_DOCS_ENABLED` | `true` | Habilita ou desabilita OpenAPI e Swagger UI juntos |
+| `FREIGHT_QUOTE_TTL` | `PT30M` | Validade da cotação em ISO 8601, entre 1 minuto e 24 horas |
 
 As chaves são obrigatórias ao iniciar a aplicação e precisam formar um par RSA de
 pelo menos 2048 bits. Em outros ambientes, forneça caminhos externos pelas variáveis
@@ -163,7 +166,8 @@ um conflito na persistência retorna `409`, sem detalhes internos do banco.
 
 A configuração de segurança libera o cadastro e o login por `POST` e o health por `GET`.
 As rotas da documentação também permitem consultas por `GET` sem autenticação.
-O perfil, a cotação e a criação de entregas exigem Bearer JWT; as demais rotas permanecem bloqueadas nesta etapa.
+O perfil, a cotação, a criação e as consultas de entregas exigem Bearer JWT;
+as demais rotas permanecem bloqueadas nesta etapa.
 Não há sessão, formulário de login
 ou autenticação Basic. O endpoint `/actuator/health` é público sem detalhes sensíveis;
 nenhum outro endpoint do Actuator é exposto.
@@ -282,8 +286,8 @@ A documentação usa `springdoc-openapi-starter-webmvc-ui` 3.1.1, compatível co
 Sua versão é explícita porque essa biblioteca não é gerenciada pelo BOM do Spring Boot.
 As demais dependências continuam usando o gerenciamento de versões do projeto.
 
-O contrato descreve os cinco endpoints atuais, validações, campos aceitos e respostas
-de sucesso e erro. Cadastro e login são públicos; perfil, cotação e criação de entregas exigem
+O contrato descreve as sete operações atuais, validações, campos aceitos e respostas
+de sucesso e erro. Cadastro e login são públicos; perfil, cotação e entregas exigem
 `bearerAuth`. A especificação mostra DTOs e esconde o principal JWT injetado,
 campos calculados de validação e detalhes das entidades persistidas.
 As senhas são marcadas como `writeOnly` e o formato de erros é `application/problem+json`.
@@ -325,12 +329,14 @@ $quote = @{
     weightKg = 2.000
 } | ConvertTo-Json
 
-Invoke-RestMethod -Method Post -Uri "http://localhost:8080/api/v1/freight/quotes" `
+$quoteResponse = Invoke-RestMethod -Method Post -Uri "http://localhost:8080/api/v1/freight/quotes" `
     -Headers @{ Authorization = "Bearer $($session.accessToken)" } `
     -ContentType "application/json" -Body $quote
+$quoteResponse
 ```
 
-A resposta contém `amount: 15.00`, `currency: "BRL"` e um aviso de tarifa fictícia.
+A resposta `201` contém `quoteId`, `amount: 15.00`, `currency: "BRL"`, o CEP e o peso
+cotados, `expiresAt` e um aviso de tarifa fictícia.
 Esta demonstração não representa preços reais de transportadoras.
 O serviço calcula `preço base + preço por kg × peso` usando `BigDecimal` e arredonda
 somente o resultado final para duas casas com `HALF_UP`. Por exemplo, com preço base
@@ -359,22 +365,29 @@ o serviço retorna `409` se encontrar mais de uma regra aplicável.
 inclui também `db/local`, com `V3__seed_fictional_freight_rates.sql`. Fora desse perfil,
 a tabela começa vazia. Use bancos separados por ambiente: um banco migrado como
 `local` mantém a migration V3 no histórico e não deve ser reutilizado em outro perfil.
-V4 cria as entregas e eventos; V3 está reservada aos dados locais.
+V3 está reservada aos dados locais; V4 cria entregas e eventos, V5 as cotações e
+V6 liga cada entrega à sua cotação. Migrations já commitadas nunca são editadas:
+mudanças de schema entram sempre em uma nova versão.
 
-As cotações não são persistidas nem reservam preço. A criação de entregas recalcula
-e armazena o valor aplicado, sem depender de uma cotação anterior.
+Cada cotação é armazenada em `freight_quotes` com o usuário que a pediu, o CEP, o peso,
+o valor e `expires_at`. Ela vale 30 minutos por padrão (`FREIGHT_QUOTE_TTL`) e expira
+exatamente em `createdAt + validade`. O valor fica travado: alterar ou remover tarifas
+depois não muda cotações já emitidas. Operadores também podem cotar, mas apenas
+clientes criam entregas. O horário vem de um `Clock` injetado, o que torna os testes
+de expiração determinísticos.
 
-Para executar os testes de cálculo, validação e autorização sem Docker:
+Para executar os testes de cálculo, validação, expiração e autorização sem Docker:
 
 ```powershell
-.\mvnw.cmd "-Dtest=FreightServiceTests,FreightControllerTests" test
+.\mvnw.cmd "-Dtest=FreightServiceTests,FreightControllerTests,FreightQuoteTests" test
 ```
 
-`FreightIntegrationTests` verifica limites das faixas, ausência de tarifa e constraints
-em PostgreSQL real via Testcontainers. Com Docker Desktop em execução:
+`FreightIntegrationTests` e `FreightQuoteIntegrationTests` verificam limites das faixas,
+ausência de tarifa, persistência das cotações e constraints em PostgreSQL real via
+Testcontainers. Com Docker Desktop em execução:
 
 ```powershell
-.\mvnw.cmd "-Dtest=FreightIntegrationTests" test
+.\mvnw.cmd "-Dtest=FreightIntegrationTests,FreightQuoteIntegrationTests" test
 ```
 
 ## Criação de entregas
@@ -382,13 +395,14 @@ em PostgreSQL real via Testcontainers. Com Docker Desktop em execução:
 `POST /api/v1/shipments` está disponível somente para `CUSTOMER`. O proprietário é
 obtido do `sub` do JWT e confirmado no banco, independentemente dos nomes dos contatos.
 Operadores recebem `403`; tokens ausentes ou usuários removidos recebem `401`.
-O JSON aceita somente origem, destino, peso e dimensões. Informar proprietário,
-preço, status ou código de rastreamento gera `400`.
+O JSON aceita somente `quoteId`, origem, destino e dimensões. Peso e frete vêm da
+cotação. Informar proprietário, peso, preço, status ou código de rastreamento gera `400`.
 
 Na mesma sessão PowerShell dos exemplos de cadastro, login e cotação:
 
 ```powershell
 $shipmentRequest = @{
+    quoteId = $quoteResponse.quoteId
     origin = @{
         contactName = "Sender"
         postalCode = "20000000"
@@ -408,7 +422,6 @@ $shipmentRequest = @{
         city = "Sao Paulo"
         state = "SP"
     }
-    weightKg = 2
     lengthCm = 30
     widthCm = 20
     heightCm = 10
@@ -420,44 +433,82 @@ $shipment = Invoke-RestMethod -Method Post -Uri "http://localhost:8080/api/v1/sh
 $shipment
 ```
 
-A resposta `201` contém UUID, código de rastreamento, endereços, medidas, frete,
-status `CREATED` e instantes de criação e atualização em ISO 8601. Neste exemplo,
-o frete é 15.00 BRL. O contato da origem representa o remetente e o do destino
-representa o destinatário, sem exigir telefone ou documento.
+A resposta `201` traz o header `Location` com `/api/v1/shipments/{id}` e contém UUID,
+código de rastreamento, `quoteId`, endereços, medidas, frete, status `CREATED` e
+instantes de criação e atualização em ISO 8601. Neste exemplo, o frete é 15.00 BRL.
+O contato da origem representa o remetente e o do destino representa o destinatário,
+sem exigir telefone ou documento.
+
+A cotação é validada nesta ordem:
+
+| Situação | Resposta |
+| --- | --- |
+| Cotação inexistente ou de outro usuário | `404` |
+| Cotação expirada | `422` |
+| CEP de destino diferente do cotado | `422` |
+| Cotação já usada por outra entrega | `409` |
+
+Uma cotação de outro usuário responde `404`, e não `403`, para não revelar que o
+identificador existe. O uso único é garantido pela constraint `uq_shipments_quote`.
+A verificação prévia no serviço só produz uma mensagem amigável; em requisições
+simultâneas com a mesma cotação, o banco aceita uma e rejeita as demais com `409`.
 
 Os dois endereços exigem nome do contato, CEP de oito dígitos, logradouro, número,
 bairro, cidade e UF brasileira em maiúsculas. Complemento é opcional. Nome, bairro e
 cidade aceitam até 100 caracteres, logradouro 150, número 20 e complemento 100.
 Espaços nas extremidades dos textos são removidos ao armazenar os endereços.
-Peso segue os limites da cotação (0.001 a 1000 kg, até três casas decimais).
 Cada dimensão aceita 0.01 a 1000 cm com até duas casas. Não há cálculo de peso cúbico.
-Sem tarifa para o destino e peso, a criação retorna `422` sem persistir uma entrega.
 
-O serviço recalcula o frete no momento da criação e salva o valor na própria entrega.
-Alterar ou remover tarifas posteriormente não altera esse histórico. Uma transação
-salva a entrega e seu evento inicial `CREATED`, com origem `API`, sem localização
-e com instantes de ocorrência e recebimento iguais ao da criação.
-Falhas ao persistir o evento também revertem a entrega.
+Uma transação salva a entrega e seu evento inicial `CREATED`, com origem `API`,
+sem localização e com instantes de ocorrência e recebimento iguais ao da criação.
+Falhas ao persistir o evento também revertem a entrega. Os status aceitos pelo banco
+são `CREATED`, `PICKED_UP`, `IN_TRANSIT`, `OUT_FOR_DELIVERY`, `DELIVERED` e `CANCELED`;
+as transições entre eles serão implementadas na próxima etapa.
 
-O código de rastreamento usa um UUID aleatório independente, representado por
-32 caracteres hexadecimais maiúsculos, com unicidade garantida no PostgreSQL.
-Uma colisão gera `409` e reverte a transação; não há tentativa automática nesta etapa.
+O código de rastreamento usa um UUID aleatório independente (122 bits aleatórios),
+representado por 32 caracteres hexadecimais maiúsculos, com unicidade garantida no
+PostgreSQL. Uma colisão gera `409` e reverte a transação; não há tentativa automática.
 A entidade possui `@Version` para as futuras atualizações concorrentes.
-A migration V4 inclui chaves estrangeiras, constraints de endereços e medidas,
-e índices para consultas futuras por proprietário, status e histórico.
 
-Consultas privadas, paginação, cancelamento e consulta pública serão implementados
-nas próximas etapas. Nenhum endpoint de leitura de entregas está liberado ainda.
-O evento inicial é persistido, mas envio de e-mail será incluído na etapa de notificações.
+## Consulta de entregas
 
-Para verificar criação, validação, autorização e regras do serviço sem Docker:
+`GET /api/v1/shipments` e `GET /api/v1/shipments/{id}` estão disponíveis para
+`CUSTOMER` e `OPERATOR`. O escopo é decidido pelo perfil gravado no banco, nunca por
+parâmetros da requisição: clientes veem apenas as próprias entregas e operadores
+veem todas. A entrega de outro cliente responde `404`, como se não existisse.
+
+```powershell
+Invoke-RestMethod -Uri "http://localhost:8080/api/v1/shipments?status=CREATED&page=0&size=20" `
+    -Headers @{ Authorization = "Bearer $($session.accessToken)" }
+
+Invoke-RestMethod -Uri "http://localhost:8080/api/v1/shipments/$($shipment.id)" `
+    -Headers @{ Authorization = "Bearer $($session.accessToken)" }
+```
+
+A listagem aceita `status` (opcional), `page` (a partir de 0, padrão 0) e `size`
+(1 a 100, padrão 20). Valores fora desses limites, status desconhecidos e UUIDs
+malformados retornam `400` em Problem Details. A resposta tem o formato
+`{ content, page, size, totalElements, totalPages }`, um DTO próprio em vez da
+serialização interna de `Page` do Spring Data, que não é um contrato estável.
+
+A ordenação é fixa: mais recentes primeiro e, em caso de empate no instante de criação,
+por `id`. O desempate impede que um item apareça em duas páginas ou desapareça.
+A ordem coincide com os índices `(customer_id, created_at DESC, id)` e
+`(status, created_at DESC, id)` da V4. Ordenação livre não é aceita, para evitar
+consultas sem índice e não expor nomes internos da entidade.
+
+Consulta pública por código de rastreamento, cancelamento e evolução do status serão
+implementados na próxima etapa. O envio de e-mail será incluído na etapa de notificações.
+
+Para verificar criação, consultas, validação, autorização e regras do serviço sem Docker:
 
 ```powershell
 .\mvnw.cmd "-Dtest=ShipmentServiceTests,ShipmentControllerTests,OpenApiDocumentationTests,DisabledOpenApiDocumentationTests" test
 ```
 
-Com Docker em execução, verifique também a persistência real e o histórico do frete:
+Com Docker em execução, verifique também persistência, preço travado, isolamento entre
+clientes, paginação e o uso único da cotação sob concorrência:
 
 ```powershell
-.\mvnw.cmd "-Dtest=ShipmentIntegrationTests" test
+.\mvnw.cmd "-Dtest=ShipmentIntegrationTests,ShipmentQueryIntegrationTests,ShipmentQuoteConcurrencyIntegrationTests" test
 ```
