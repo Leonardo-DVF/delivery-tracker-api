@@ -1,10 +1,13 @@
 package io.github.leonardodvf.deliverytracker.freight.controller;
 
 import io.github.leonardodvf.deliverytracker.auth.config.SecurityConfig;
+import io.github.leonardodvf.deliverytracker.freight.entity.FreightQuote;
 import io.github.leonardodvf.deliverytracker.freight.exception.ConflictingFreightRatesException;
 import io.github.leonardodvf.deliverytracker.freight.exception.FreightRateUnavailableException;
 import io.github.leonardodvf.deliverytracker.freight.service.FreightService;
 import io.github.leonardodvf.deliverytracker.shared.exception.ApiExceptionHandler;
+import io.github.leonardodvf.deliverytracker.user.entity.User;
+import io.github.leonardodvf.deliverytracker.user.entity.UserRole;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.MethodSource;
@@ -17,8 +20,12 @@ import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.request.RequestPostProcessor;
 
 import java.math.BigDecimal;
+import java.time.Duration;
+import java.time.Instant;
+import java.util.UUID;
 import java.util.stream.Stream;
 
 import static org.mockito.Mockito.*;
@@ -35,27 +42,35 @@ class FreightControllerTests {
     @Autowired private MockMvc mvc;
     @MockitoBean private FreightService freight;
     @MockitoBean private JwtDecoder decoder;
+    private final UUID requesterId = UUID.randomUUID();
 
     @ParameterizedTest
     @ValueSource(strings = {"CUSTOMER", "OPERATOR"})
-    void allowsBothProfilesAndReturnsBackendPriceAndFictionalDisclaimer(String role) throws Exception {
-        when(freight.calculateAmount("01000000", new BigDecimal("2"))).thenReturn(new BigDecimal("15.00"));
+    void storesQuoteForTokenSubjectAndReturnsBackendPriceExpirationAndDisclaimer(String role) throws Exception {
+        var requester = new User("Requester", "requester@example.test", "hash", UserRole.valueOf(role));
+        var quote = new FreightQuote(requester, "01000000", new BigDecimal("2"), new BigDecimal("15.00"),
+                Instant.parse("2026-11-18T12:00:00Z"), Duration.ofMinutes(30));
+        when(freight.createQuote(requesterId, "01000000", new BigDecimal("2"))).thenReturn(quote);
 
-        mvc.perform(post("/api/v1/freight/quotes").with(jwt().authorities(new SimpleGrantedAuthority("ROLE_" + role)))
+        mvc.perform(post("/api/v1/freight/quotes").with(authenticated(role))
                         .contentType(MediaType.APPLICATION_JSON).content(VALID))
-                .andExpect(status().isOk())
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.quoteId").value(quote.getId().toString()))
                 .andExpect(jsonPath("$.amount").value(15.00))
                 .andExpect(jsonPath("$.currency").value("BRL"))
+                .andExpect(jsonPath("$.destinationPostalCode").value("01000000"))
+                .andExpect(jsonPath("$.weightKg").value(2))
+                .andExpect(jsonPath("$.expiresAt").value("2026-11-18T12:30:00Z"))
                 .andExpect(jsonPath("$.disclaimer").value("Fictional demonstration tariff; not a real carrier quote."))
-                .andExpect(jsonPath("$.id").doesNotExist());
+                .andExpect(jsonPath("$.requester").doesNotExist());
 
-        verify(freight).calculateAmount("01000000", new BigDecimal("2"));
+        verify(freight).createQuote(requesterId, "01000000", new BigDecimal("2"));
     }
 
     @ParameterizedTest
     @MethodSource("invalidRequests")
     void rejectsInvalidPostalCodesWeightsAndClientSuppliedPrices(String payload) throws Exception {
-        mvc.perform(post("/api/v1/freight/quotes").with(jwt().authorities(new SimpleGrantedAuthority("ROLE_CUSTOMER")))
+        mvc.perform(post("/api/v1/freight/quotes").with(authenticated("CUSTOMER"))
                         .contentType(MediaType.APPLICATION_JSON).content(payload))
                 .andExpect(status().isBadRequest())
                 .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON));
@@ -83,9 +98,9 @@ class FreightControllerTests {
 
     @Test
     void returnsUnprocessableContentWhenNoTariffMatches() throws Exception {
-        when(freight.calculateAmount(anyString(), any())).thenThrow(new FreightRateUnavailableException());
+        when(freight.createQuote(any(), anyString(), any())).thenThrow(new FreightRateUnavailableException());
 
-        mvc.perform(post("/api/v1/freight/quotes").with(jwt().authorities(new SimpleGrantedAuthority("ROLE_CUSTOMER")))
+        mvc.perform(post("/api/v1/freight/quotes").with(authenticated("CUSTOMER"))
                         .contentType(MediaType.APPLICATION_JSON).content(VALID))
                 .andExpect(status().isUnprocessableContent())
                 .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON))
@@ -94,12 +109,17 @@ class FreightControllerTests {
 
     @Test
     void returnsConflictWhenTariffsAreAmbiguous() throws Exception {
-        when(freight.calculateAmount(anyString(), any())).thenThrow(new ConflictingFreightRatesException());
+        when(freight.createQuote(any(), anyString(), any())).thenThrow(new ConflictingFreightRatesException());
 
-        mvc.perform(post("/api/v1/freight/quotes").with(jwt().authorities(new SimpleGrantedAuthority("ROLE_CUSTOMER")))
+        mvc.perform(post("/api/v1/freight/quotes").with(authenticated("CUSTOMER"))
                         .contentType(MediaType.APPLICATION_JSON).content(VALID))
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.detail").value("Multiple freight tariffs match the destination and weight"));
+    }
+
+    private RequestPostProcessor authenticated(String role) {
+        return jwt().jwt(token -> token.subject(requesterId.toString()))
+                .authorities(new SimpleGrantedAuthority("ROLE_" + role));
     }
 
     static Stream<String> invalidRequests() {

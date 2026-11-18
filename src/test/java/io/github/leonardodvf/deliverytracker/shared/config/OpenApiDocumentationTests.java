@@ -94,6 +94,9 @@ class OpenApiDocumentationTests {
         assertThat(registrationSchema.at("/properties/name/maxLength").asInt()).isEqualTo(100);
         assertThat(registrationSchema.path("required").size()).isEqualTo(3);
         assertThat(schemas.path("FreightQuoteRequest").path("properties").size()).isEqualTo(2);
+        assertThat(schemas.at("/FreightQuoteResponse/properties/quoteId/format").asText()).isEqualTo("uuid");
+        assertThat(schemas.at("/FreightQuoteResponse/properties/expiresAt/format").asText()).isEqualTo("date-time");
+        assertThat(schemas.has("FreightQuote")).isFalse();
         assertThat(schemas.path("CreateShipmentRequest").path("properties").size()).isEqualTo(6);
         assertThat(schemas.has("Shipment")).isFalse();
     }
@@ -121,6 +124,9 @@ class OpenApiDocumentationTests {
                 .isEqualTo(400);
         assertThat(spec.at("/paths/~1api~1v1~1freight~1quotes/post/responses/422/$ref").asText())
                 .isEqualTo("#/components/responses/FreightUnavailable");
+        assertThat(spec.at("/paths/~1api~1v1~1freight~1quotes/post/responses/201/content/application~1json/schema/$ref").asText())
+                .endsWith("/FreightQuoteResponse");
+        assertThat(spec.at("/paths/~1api~1v1~1freight~1quotes/post/responses").has("200")).isFalse();
     }
 
     @Test

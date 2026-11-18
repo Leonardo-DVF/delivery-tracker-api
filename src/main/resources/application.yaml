@@ -31,6 +31,8 @@ app:
     private-key: ${JWT_PRIVATE_KEY:file:./secrets/private.pem}
     public-key: ${JWT_PUBLIC_KEY:file:./secrets/public.pem}
     ttl-seconds: ${JWT_TTL_SECONDS:3600}
+  freight:
+    quote-ttl: ${FREIGHT_QUOTE_TTL:PT30M}
 springdoc:
   api-docs:
     enabled: ${API_DOCS_ENABLED:true}
