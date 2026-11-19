@@ -14,6 +14,8 @@ import io.github.leonardodvf.deliverytracker.tracking.controller.TrackingControl
 import io.github.leonardodvf.deliverytracker.tracking.service.TrackingService;
 import io.github.leonardodvf.deliverytracker.user.controller.UserController;
 import io.github.leonardodvf.deliverytracker.user.service.UserService;
+import io.github.leonardodvf.deliverytracker.webhook.controller.CarrierWebhookController;
+import io.github.leonardodvf.deliverytracker.webhook.service.CarrierWebhookService;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.EnableAutoConfiguration;
@@ -48,6 +50,7 @@ class OpenApiDocumentationTests {
     @MockitoBean private FreightService freight;
     @MockitoBean private ShipmentService shipments;
     @MockitoBean private TrackingService tracking;
+    @MockitoBean private CarrierWebhookService webhooks;
 
     @Test
     void exposesOnlyCurrentApiOperationsWithoutAuthentication() throws Exception {
@@ -58,8 +61,8 @@ class OpenApiDocumentationTests {
                 .containsExactlyInAnyOrder("/api/v1/auth/register", "/api/v1/auth/login", "/api/v1/users/me",
                         "/api/v1/freight/quotes", "/api/v1/shipments", "/api/v1/shipments/{id}",
                         "/api/v1/shipments/{id}/cancel", "/api/v1/shipments/{id}/events",
-                        "/api/v1/tracking/{trackingCode}");
-        verifyNoInteractions(registration, login, users, decoder, freight, shipments, tracking);
+                        "/api/v1/tracking/{trackingCode}", "/api/v1/webhooks/carrier");
+        verifyNoInteractions(registration, login, users, decoder, freight, shipments, tracking, webhooks);
     }
 
     @Test
@@ -158,6 +161,15 @@ class OpenApiDocumentationTests {
         assertThat(spec.at("/components/schemas/PublicTrackingResponse/properties").properties().stream()
                 .map(Map.Entry::getKey).toList())
                 .containsExactlyInAnyOrder("trackingCode", "status", "destinationCity", "destinationState", "updatedAt", "events");
+        var webhook = spec.at("/paths/~1api~1v1~1webhooks~1carrier/post");
+        assertThat(webhook.path("security").size()).isZero();
+        assertThat(webhook.at("/requestBody/content/application~1json/schema/$ref").asText()).endsWith("/CarrierEventPayload");
+        assertThat(webhook.at("/responses/401/$ref").asText()).isEqualTo("#/components/responses/InvalidWebhookSignature");
+        assertThat(webhook.path("parameters").findValuesAsString("name"))
+                .containsExactlyInAnyOrder("X-Carrier-Timestamp", "X-Carrier-Signature");
+        assertThat(spec.at("/components/schemas/CarrierEventPayload/properties").properties().stream()
+                .map(Map.Entry::getKey).toList())
+                .containsExactlyInAnyOrder("eventId", "trackingCode", "status", "occurredAt", "location");
     }
 
     @Test
@@ -197,7 +209,7 @@ class OpenApiDocumentationTests {
     })
     @Import({OpenApiConfig.class, SecurityConfig.class, ApiExceptionHandler.class,
             RegistrationController.class, LoginController.class, UserController.class, FreightController.class, ShipmentController.class,
-            TrackingController.class})
+            TrackingController.class, CarrierWebhookController.class})
     static class TestApplication {
     }
 }

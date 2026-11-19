@@ -15,7 +15,8 @@ Clientes criam entregas a partir de uma cotação, com código de rastreamento �
 evento inicial; cada cliente consulta só as próprias entregas e operadores consultam todas.
 Operadores evoluem o status por uma máquina de estados com histórico de eventos,
 clientes cancelam antes da coleta e qualquer pessoa acompanha a entrega pelo código.
-Webhooks de transportadoras e notificações virão nas próximas etapas.
+Uma transportadora fictícia envia eventos por webhook assinado com HMAC, com deduplicação
+por ID do evento. As notificações por e-mail virão na próxima etapa.
 
 ## Tecnologias
 
@@ -90,6 +91,8 @@ diretamente. Nesta etapa, o Compose executa somente o PostgreSQL; a aplicação 
 | `LOCAL_OPERATOR_PASSWORD` | Não definida | Senha do operador; usada somente no perfil `local` |
 | `API_DOCS_ENABLED` | `true` | Habilita ou desabilita OpenAPI e Swagger UI juntos |
 | `FREIGHT_QUOTE_TTL` | `PT30M` | Validade da cotação em ISO 8601, entre 1 minuto e 24 horas |
+| `CARRIER_WEBHOOK_SECRET` | Sem valor predefinido | Segredo HMAC dos webhooks, com pelo menos 32 caracteres; obrigatório |
+| `CARRIER_WEBHOOK_TOLERANCE` | `PT5M` | Diferença máxima do timestamp assinado, entre 30 segundos e 15 minutos |
 
 As chaves são obrigatórias ao iniciar a aplicação e precisam formar um par RSA de
 pelo menos 2048 bits. Em outros ambientes, forneça caminhos externos pelas variáveis
@@ -288,9 +291,10 @@ A documentação usa `springdoc-openapi-starter-webmvc-ui` 3.1.1, compatível co
 Sua versão é explícita porque essa biblioteca não é gerenciada pelo BOM do Spring Boot.
 As demais dependências continuam usando o gerenciamento de versões do projeto.
 
-O contrato descreve as onze operações atuais, validações, campos aceitos e respostas
-de sucesso e erro. Cadastro, login e rastreamento por código são públicos; perfil,
-cotação, entregas e eventos exigem `bearerAuth`. A especificação mostra DTOs e esconde o principal JWT injetado,
+O contrato descreve as doze operações atuais, validações, campos aceitos e respostas
+de sucesso e erro. Cadastro, login e rastreamento por código são públicos; o webhook da
+transportadora é autenticado por assinatura HMAC; perfil, cotação, entregas e eventos
+exigem `bearerAuth`. A especificação mostra DTOs e esconde o principal JWT injetado,
 campos calculados de validação e detalhes das entidades persistidas.
 As senhas são marcadas como `writeOnly` e o formato de erros é `application/problem+json`.
 Os exemplos usam dados fictícios e não configuram credenciais na aplicação.
@@ -529,14 +533,14 @@ Só é possível avançar um passo por vez. `CANCELED` é aceito até `IN_TRANSI
 `DELIVERED` e `CANCELED` são finais. A regra fica em `ShipmentStatus.canTransitionTo`,
 com um `switch` exaustivo: um status novo não compila até ter suas transições definidas.
 `Shipment.transitionTo` é a única forma de mudar o status, então qualquer caminho
-(API, futuros webhooks) obedece à mesma regra. Uma transição inválida responde `409`
+(API e webhooks) obedece à mesma regra. Uma transição inválida responde `409`
 com `currentStatus` e `requestedStatus` no Problem Details.
 
 | Método | Rota | Quem | Efeito |
 | --- | --- | --- | --- |
 | `POST` | `/api/v1/shipments/{id}/events` | `OPERATOR` | Muda o status e registra um evento |
 | `POST` | `/api/v1/shipments/{id}/cancel` | `CUSTOMER` (própria) ou `OPERATOR` | Cancela e registra um evento |
-| `GET` | `/api/v1/shipments/{id}/events` | Mesmo escopo de `GET /{id}` | Histórico, do mais antigo ao mais recente |
+| `GET` | `/api/v1/shipments/{id}/events` | Mesmo escopo de `GET /{id}` | Histórico, na ordem em que os eventos foram aplicados |
 | `GET` | `/api/v1/tracking/{trackingCode}` | Público | Status, cidade/UF de destino e linha do tempo |
 
 No exemplo, `$operatorSession` é a resposta do login de um operador, criado como em
@@ -554,7 +558,7 @@ Invoke-RestMethod -Uri "http://localhost:8080/api/v1/tracking/$($shipment.tracki
 O evento aceita apenas `status` e `location` (opcional, até 150 caracteres; vazio vira
 `null`). Os instantes de ocorrência e recebimento são os do servidor, e a origem é
 `OPERATOR`. Instantes informados pela transportadora, com eventos fora de ordem, chegam
-com os webhooks da próxima etapa; por isso a tabela já separa `occurred_at` e `received_at`.
+pelos [webhooks](#webhooks-da-transportadora); por isso a tabela separa `occurred_at` e `received_at`.
 A mudança de status e o evento são gravados na mesma transação.
 
 Cancelamento: o cliente cancela a própria entrega somente enquanto ela está `CREATED`,
@@ -577,7 +581,7 @@ inviável descobrir códigos válidos por tentativa. Limite de requisições nã
 desta etapa.
 
 Esta etapa não exigiu migration: a V6 já alinhou as constraints de status, e a tabela
-`tracking_events` com o índice `(shipment_id, occurred_at, received_at)` veio da V4.
+`tracking_events` veio da V4. O índice do histórico foi trocado pela V8, junto com os webhooks.
 
 Para verificar a máquina de estados, autorização e validação sem Docker:
 
@@ -590,4 +594,116 @@ público via HTTP e a disputa entre mudanças simultâneas:
 
 ```powershell
 .\mvnw.cmd "-Dtest=TrackingEventIntegrationTests,ShipmentCancellationIntegrationTests,PublicTrackingIntegrationTests,TrackingEventConcurrencyIntegrationTests" test
+```
+
+## Webhooks da transportadora
+
+`POST /api/v1/webhooks/carrier` recebe eventos de uma transportadora fictícia. A rota não
+usa token JWT: a autenticação é uma assinatura HMAC-SHA256 com um segredo compartilhado.
+
+| Cabeçalho | Conteúdo |
+| --- | --- |
+| `X-Carrier-Timestamp` | Instante da assinatura em segundos Unix |
+| `X-Carrier-Signature` | `sha256=` seguido do HMAC em hexadecimal de `<timestamp>.<corpo bruto>` |
+
+```json
+{
+  "eventId": "evt_20261119_0001",
+  "trackingCode": "3F2A9C1B7D4E4F0A8B6C5D2E1F0A9B8C",
+  "status": "PICKED_UP",
+  "occurredAt": "2026-11-19T14:00:00Z",
+  "location": "Centro de distribuição Rio"
+}
+```
+
+Validação da assinatura, nesta ordem e antes de qualquer leitura do JSON:
+
+- O corpo é recebido como bytes. A assinatura cobre os bytes exatos enviados;
+  desserializar e serializar de novo poderia mudar espaços ou a ordem dos campos.
+- O timestamp precisa estar a no máximo 5 minutos do relógio do servidor
+  (`CARRIER_WEBHOOK_TOLERANCE`). Assim uma requisição capturada não pode ser reenviada depois.
+- A comparação usa `MessageDigest.isEqual`, em tempo constante, para que o tempo de resposta
+  não revele quantos bytes coincidiram.
+- Qualquer falha responde `401` com a mesma mensagem. O motivo vai apenas para o log.
+
+O segredo vem de `CARRIER_WEBHOOK_SECRET`, com pelo menos 32 caracteres. A aplicação não
+inicia sem ele, e o `toString` das propriedades mascara o valor. Para gerar um segredo no PowerShell:
+
+```powershell
+$bytes = New-Object byte[] 32
+[Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
+-join ($bytes | ForEach-Object { $_.ToString("x2") })
+```
+
+Transportadoras entregam webhooks pelo menos uma vez e nem sempre em ordem. Por isso,
+toda resposta `2xx` significa "pare de reenviar", e o campo `outcome` diz o que aconteceu:
+
+| Situação | Resposta |
+| --- | --- |
+| Próximo status válido | `200` `APPLIED`: muda o status e grava o evento |
+| `eventId` já processado | `200` `DUPLICATE`: nada muda |
+| Status já ultrapassado, repetido ou impossível (entrega finalizada, `CANCELED` depois de sair para entrega) | `200` `IGNORED`: não é gravado |
+| Status que pula etapas, como `IN_TRANSIT` com a entrega em `CREATED` | `409`: a transportadora reenvia depois |
+| Código de rastreamento inexistente | `404` |
+| JSON malformado ou campos inválidos | `400` |
+
+A deduplicação usa a coluna `carrier_event_id` com a constraint única
+`uq_tracking_events_carrier_event` (V7). A verificação prévia no serviço só evita
+trabalho; em entregas simultâneas do mesmo evento, o banco e o `@Version` da entrega
+garantem que só uma seja aplicada. As demais recebem `DUPLICATE` ou `409`, e o reenvio
+seguinte responde `DUPLICATE`. A V7 também exige que todo evento com origem `CARRIER`
+tenha `carrier_event_id`, e somente esses.
+
+O `409` para eventos fora de ordem aproveita o reenvio da própria transportadora: quando o
+evento anterior chega, o reenvio passa a ser aplicado. Já um status que nunca poderá ser
+aplicado responde `200`, para não gerar reenvios infinitos.
+
+O evento guarda `occurredAt` no relógio da transportadora e `receivedAt` no do servidor.
+O histórico é listado pela ordem em que os eventos foram aplicados (`received_at`), com
+`occurred_at` como desempate. Ordenar pelo instante informado poderia mostrar um status
+antes do anterior quando os relógios divergem. A V8 troca o índice da V4 por
+`(shipment_id, received_at, occurred_at)`. `occurredAt` não pode estar mais de 5 minutos no futuro.
+
+Diferente da API pública, o webhook ignora campos desconhecidos (*tolerant reader*):
+uma transportadora que adiciona um campo ao payload não deve fazer todas as entregas falharem.
+`eventId` aceita até 100 caracteres entre letras, números, `.`, `_`, `:` e `-`.
+
+Para simular a transportadora no PowerShell, com a aplicação em execução e `$shipment`
+criado antes:
+
+```powershell
+$secret = "o mesmo valor de CARRIER_WEBHOOK_SECRET"
+$body = @{
+    eventId = "evt-0001"
+    trackingCode = $shipment.trackingCode
+    status = "PICKED_UP"
+    occurredAt = (Get-Date).ToUniversalTime().ToString("o")
+    location = "Centro de distribuição Rio"
+} | ConvertTo-Json -Compress
+$timestamp = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds().ToString()
+$bodyBytes = [Text.Encoding]::UTF8.GetBytes($body)
+$hmac = New-Object System.Security.Cryptography.HMACSHA256 -ArgumentList @(, [Text.Encoding]::UTF8.GetBytes($secret))
+$hash = $hmac.ComputeHash([Text.Encoding]::UTF8.GetBytes("$timestamp.$body"))
+$signature = "sha256=" + (-join ($hash | ForEach-Object { $_.ToString("x2") }))
+
+Invoke-RestMethod -Method Post -Uri "http://localhost:8080/api/v1/webhooks/carrier" `
+    -ContentType "application/json" -Body $bodyBytes `
+    -Headers @{ "X-Carrier-Timestamp" = $timestamp; "X-Carrier-Signature" = $signature }
+```
+
+O corpo é enviado como bytes para que o PowerShell não altere a codificação depois da assinatura.
+Rotação de segredo (aceitar dois segredos durante a troca), limite de tamanho do corpo e
+várias transportadoras (unicidade por `(carrier, carrier_event_id)`) ficam fora desta etapa.
+
+Para verificar assinatura, configuração, regras de entrega e o contrato HTTP sem Docker:
+
+```powershell
+.\mvnw.cmd "-Dtest=WebhookSignatureVerifierTests,CarrierWebhookPropertiesTests,CarrierWebhookServiceTests,CarrierWebhookControllerTests" test
+```
+
+Com Docker em execução, verifique as constraints da V7, o fluxo HTTP com HMAC real e as
+entregas simultâneas do mesmo evento:
+
+```powershell
+.\mvnw.cmd "-Dtest=TrackingEventConstraintIntegrationTests,CarrierWebhookIntegrationTests,CarrierWebhookConcurrencyIntegrationTests" test
 ```
