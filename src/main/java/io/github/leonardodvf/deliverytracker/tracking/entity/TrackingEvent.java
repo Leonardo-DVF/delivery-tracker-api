@@ -18,6 +18,7 @@ public class TrackingEvent {
     public static final String SOURCE_API = "API";
     public static final String SOURCE_OPERATOR = "OPERATOR";
     public static final String SOURCE_CUSTOMER = "CUSTOMER";
+    public static final String SOURCE_CARRIER = "CARRIER";
 
     @Id
     private UUID id;
@@ -46,6 +47,16 @@ public class TrackingEvent {
     public static TrackingEvent statusChange(Shipment shipment, String source, String location) {
         var at = shipment.getUpdatedAt();
         return of(shipment, shipment.getStatus(), at, at, source, location);
+    }
+
+    /**
+     * Carrier event for the status the shipment has just moved to. occurredAt is the carrier's clock,
+     * receivedAt is ours, so late deliveries stay visible.
+     */
+    public static TrackingEvent fromCarrier(Shipment shipment, String carrierEventId, Instant occurredAt, String location) {
+        var event = of(shipment, shipment.getStatus(), occurredAt, shipment.getUpdatedAt(), SOURCE_CARRIER, location);
+        event.carrierEventId = carrierEventId;
+        return event;
     }
 
     private static TrackingEvent of(Shipment shipment, ShipmentStatus status, Instant occurredAt,

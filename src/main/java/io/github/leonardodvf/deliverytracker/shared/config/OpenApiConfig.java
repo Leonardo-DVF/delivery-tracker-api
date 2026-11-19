@@ -70,7 +70,11 @@ public class OpenApiConfig {
                         "Transition not allowed from the current status, or the shipment changed concurrently",
                         Map.of("type", "about:blank", "title", "Conflict", "status", 409,
                                 "detail", "Cannot change shipment status from CREATED to DELIVERED",
-                                "currentStatus", "CREATED", "requestedStatus", "DELIVERED")));
+                                "currentStatus", "CREATED", "requestedStatus", "DELIVERED")))
+                .addResponses("InvalidWebhookSignature", problemResponse(
+                        "Missing, malformed, expired or wrong webhook signature; the reason is not disclosed",
+                        Map.of("type", "about:blank", "title", "Unauthorized", "status", 401,
+                                "detail", "Invalid or missing webhook signature")));
         return new OpenAPI()
                 .info(new Info().title("Delivery Tracker API").version("v1")
                         .description("Shipment management and tracking API. Public registration always creates a CUSTOMER."))
