@@ -1,6 +1,7 @@
 package io.github.leonardodvf.deliverytracker.shipment.entity;
 
 import io.github.leonardodvf.deliverytracker.freight.entity.FreightQuote;
+import io.github.leonardodvf.deliverytracker.shipment.exception.InvalidStatusTransitionException;
 import io.github.leonardodvf.deliverytracker.user.entity.User;
 import jakarta.persistence.*;
 import lombok.AccessLevel;
@@ -86,5 +87,17 @@ public class Shipment {
         this.status = ShipmentStatus.CREATED;
         this.createdAt = createdAt;
         this.updatedAt = createdAt;
+    }
+
+    /** The only way to change the status, so every caller (API, webhooks) obeys the same state machine. */
+    public void transitionTo(ShipmentStatus next, Instant at) {
+        if (!status.canTransitionTo(next)) {
+            throw new InvalidStatusTransitionException(status, next);
+        }
+        if (at.isBefore(updatedAt)) {
+            throw new IllegalArgumentException("Status change cannot predate the last update");
+        }
+        this.status = next;
+        this.updatedAt = at;
     }
 }
