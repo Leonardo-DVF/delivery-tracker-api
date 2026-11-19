@@ -35,6 +35,8 @@ public class TrackingEvent {
     private String source;
     @Column(length = 150)
     private String location;
+    @Column(length = 100, unique = true, updatable = false)
+    private String carrierEventId;
 
     public static TrackingEvent initial(Shipment shipment) {
         return of(shipment, ShipmentStatus.CREATED, shipment.getCreatedAt(), shipment.getCreatedAt(), SOURCE_API, null);
