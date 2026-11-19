@@ -5,6 +5,7 @@ import io.github.leonardodvf.deliverytracker.shipment.entity.ShipmentStatus;
 import io.github.leonardodvf.deliverytracker.shipment.exception.InvalidStatusTransitionException;
 import io.github.leonardodvf.deliverytracker.shipment.exception.ShipmentNotFoundException;
 import io.github.leonardodvf.deliverytracker.shipment.repository.ShipmentRepository;
+import io.github.leonardodvf.deliverytracker.tracking.dto.PublicTrackingResponse;
 import io.github.leonardodvf.deliverytracker.tracking.dto.RecordTrackingEventRequest;
 import io.github.leonardodvf.deliverytracker.tracking.dto.TrackingEventResponse;
 import io.github.leonardodvf.deliverytracker.tracking.entity.TrackingEvent;
@@ -22,6 +23,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.List;
+import java.util.Locale;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -160,5 +162,27 @@ class TrackingServiceTests {
         assertThatThrownBy(() -> service.history(UUID.randomUUID(), shipment.getId()))
                 .isInstanceOf(ResponseStatusException.class);
         verifyNoInteractions(shipments, events);
+    }
+
+    @Test
+    void publicTrackingNormalizesCodeAndNeedsNoUser() {
+        var event = TrackingEvent.initial(shipment);
+        when(shipments.findByTrackingCode(shipment.getTrackingCode())).thenReturn(Optional.of(shipment));
+        when(events.findByShipmentIdOrderByOccurredAtAscReceivedAtAsc(shipment.getId())).thenReturn(List.of(event));
+
+        var result = service.publicTracking(shipment.getTrackingCode().toLowerCase(Locale.ROOT));
+
+        assertThat(result.trackingCode()).isEqualTo(shipment.getTrackingCode());
+        assertThat(result.status()).isEqualTo(ShipmentStatus.CREATED);
+        assertThat(result.destinationCity()).isEqualTo("São Paulo");
+        assertThat(result.destinationState()).isEqualTo("SP");
+        assertThat(result.events()).extracting(PublicTrackingResponse.Event::status).containsExactly(ShipmentStatus.CREATED);
+        verifyNoInteractions(users);
+    }
+
+    @Test
+    void publicTrackingOfUnknownCodeIsNotFound() {
+        assertThatThrownBy(() -> service.publicTracking("0".repeat(32))).isInstanceOf(ShipmentNotFoundException.class);
+        verifyNoInteractions(events);
     }
 }

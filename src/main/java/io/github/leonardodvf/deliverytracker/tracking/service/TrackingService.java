@@ -2,6 +2,7 @@ package io.github.leonardodvf.deliverytracker.tracking.service;
 
 import io.github.leonardodvf.deliverytracker.shipment.exception.ShipmentNotFoundException;
 import io.github.leonardodvf.deliverytracker.shipment.repository.ShipmentRepository;
+import io.github.leonardodvf.deliverytracker.tracking.dto.PublicTrackingResponse;
 import io.github.leonardodvf.deliverytracker.tracking.dto.RecordTrackingEventRequest;
 import io.github.leonardodvf.deliverytracker.tracking.dto.TrackingEventResponse;
 import io.github.leonardodvf.deliverytracker.tracking.entity.TrackingEvent;
@@ -16,6 +17,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 import java.time.Clock;
 import java.util.List;
+import java.util.Locale;
 import java.util.UUID;
 
 @Service
@@ -58,6 +60,15 @@ public class TrackingService {
         }
         return events.findByShipmentIdOrderByOccurredAtAscReceivedAtAsc(shipmentId).stream()
                 .map(TrackingEventResponse::from).toList();
+    }
+
+    /** Unauthenticated lookup; the 128-bit random tracking code is the only key, so guessing codes is impractical. */
+    @Transactional(readOnly = true)
+    public PublicTrackingResponse publicTracking(String trackingCode) {
+        var shipment = shipments.findByTrackingCode(trackingCode.toUpperCase(Locale.ROOT))
+                .orElseThrow(ShipmentNotFoundException::new);
+        return PublicTrackingResponse.from(shipment,
+                events.findByShipmentIdOrderByOccurredAtAscReceivedAtAsc(shipment.getId()));
     }
 
     private User authenticatedUser(UUID userId) {

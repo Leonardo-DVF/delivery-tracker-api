@@ -16,6 +16,8 @@ public interface ShipmentRepository extends JpaRepository<Shipment, UUID> {
 
     boolean existsByIdAndCustomerId(UUID id, UUID customerId);
 
+    Optional<Shipment> findByTrackingCode(String trackingCode);
+
     Page<Shipment> findByCustomerId(UUID customerId, Pageable pageable);
 
     Page<Shipment> findByCustomerIdAndStatus(UUID customerId, ShipmentStatus status, Pageable pageable);

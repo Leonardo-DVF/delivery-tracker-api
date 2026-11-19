@@ -6,6 +6,7 @@ import io.github.leonardodvf.deliverytracker.shipment.entity.Shipment;
 import io.github.leonardodvf.deliverytracker.shipment.entity.ShipmentStatus;
 import io.github.leonardodvf.deliverytracker.shipment.exception.InvalidStatusTransitionException;
 import io.github.leonardodvf.deliverytracker.shipment.exception.ShipmentNotFoundException;
+import io.github.leonardodvf.deliverytracker.tracking.dto.PublicTrackingResponse;
 import io.github.leonardodvf.deliverytracker.tracking.dto.RecordTrackingEventRequest;
 import io.github.leonardodvf.deliverytracker.tracking.dto.TrackingEventResponse;
 import io.github.leonardodvf.deliverytracker.tracking.service.TrackingService;
@@ -160,6 +161,42 @@ class TrackingControllerTests {
     void historyRequiresAuthenticationAndAKnownRole() throws Exception {
         mvc.perform(get("/api/v1/shipments/" + shipmentId + "/events")).andExpect(status().isUnauthorized());
         mvc.perform(get("/api/v1/shipments/" + shipmentId + "/events").with(as("ADMIN"))).andExpect(status().isForbidden());
+        verifyNoInteractions(tracking);
+    }
+
+    @Test
+    void publicTrackingWorksWithoutAToken() throws Exception {
+        var code = "3F2A9C1B7D4E4F0A8B6C5D2E1F0A9B8C";
+        var at = Instant.parse("2026-11-19T10:00:00Z");
+        when(tracking.publicTracking(code)).thenReturn(new PublicTrackingResponse(code, ShipmentStatus.PICKED_UP,
+                "São Paulo", "SP", at, List.of(new PublicTrackingResponse.Event(ShipmentStatus.PICKED_UP, at, "Rio hub"))));
+
+        mvc.perform(get("/api/v1/tracking/" + code))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.trackingCode").value(code))
+                .andExpect(jsonPath("$.status").value("PICKED_UP"))
+                .andExpect(jsonPath("$.destinationCity").value("São Paulo"))
+                .andExpect(jsonPath("$.events[0].location").value("Rio hub"))
+                .andExpect(jsonPath("$.events[0].source").doesNotExist())
+                .andExpect(jsonPath("$.id").doesNotExist());
+    }
+
+    @Test
+    void publicTrackingAcceptsLowercaseCodes() throws Exception {
+        var code = "3f2a9c1b7d4e4f0a8b6c5d2e1f0a9b8c";
+        when(tracking.publicTracking(code)).thenThrow(new ShipmentNotFoundException());
+
+        mvc.perform(get("/api/v1/tracking/" + code)).andExpect(status().isNotFound());
+        verify(tracking).publicTracking(code);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"short", "3F2A9C1B7D4E4F0A8B6C5D2E1F0A9B8CA", "3F2A9C1B-7D4E-4F0A-8B6C-5D2E1F0A9B8C",
+            "GGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGG"})
+    void publicTrackingRejectsMalformedCodesBeforeQuerying(String code) throws Exception {
+        mvc.perform(get("/api/v1/tracking/" + code))
+                .andExpect(status().isBadRequest())
+                .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON));
         verifyNoInteractions(tracking);
     }
 

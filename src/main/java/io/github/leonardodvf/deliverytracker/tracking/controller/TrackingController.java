@@ -1,5 +1,6 @@
 package io.github.leonardodvf.deliverytracker.tracking.controller;
 
+import io.github.leonardodvf.deliverytracker.tracking.dto.PublicTrackingResponse;
 import io.github.leonardodvf.deliverytracker.tracking.dto.RecordTrackingEventRequest;
 import io.github.leonardodvf.deliverytracker.tracking.dto.TrackingEventResponse;
 import io.github.leonardodvf.deliverytracker.tracking.service.TrackingService;
@@ -10,6 +11,7 @@ import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.Pattern;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
@@ -60,5 +62,20 @@ public class TrackingController {
     public List<TrackingEventResponse> history(@Parameter(hidden = true) @AuthenticationPrincipal Jwt jwt,
             @PathVariable UUID id) {
         return tracking.history(UUID.fromString(jwt.getSubject()), id);
+    }
+
+    @GetMapping("/tracking/{trackingCode}")
+    @Operation(summary = "Track a shipment by code (public)",
+            description = "No authentication. Returns the current status, destination city/state and the event "
+                    + "timeline, without names, addresses or customer data. The code is case-insensitive.")
+    @ApiResponses({
+        @ApiResponse(responseCode = "200", description = "Shipment found"),
+        @ApiResponse(responseCode = "400", ref = "#/components/responses/BadRequest"),
+        @ApiResponse(responseCode = "404", ref = "#/components/responses/ShipmentNotFound")
+    })
+    public PublicTrackingResponse publicTracking(
+            @Parameter(description = "32 hexadecimal characters", example = "3F2A9C1B7D4E4F0A8B6C5D2E1F0A9B8C")
+            @PathVariable @Pattern(regexp = "[0-9A-Fa-f]{32}") String trackingCode) {
+        return tracking.publicTracking(trackingCode);
     }
 }
