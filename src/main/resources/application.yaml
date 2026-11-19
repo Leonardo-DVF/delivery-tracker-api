@@ -33,6 +33,10 @@ app:
     ttl-seconds: ${JWT_TTL_SECONDS:3600}
   freight:
     quote-ttl: ${FREIGHT_QUOTE_TTL:PT30M}
+  carrier:
+    webhook:
+      secret: ${CARRIER_WEBHOOK_SECRET:}
+      tolerance: ${CARRIER_WEBHOOK_TOLERANCE:PT5M}
 springdoc:
   api-docs:
     enabled: ${API_DOCS_ENABLED:true}
