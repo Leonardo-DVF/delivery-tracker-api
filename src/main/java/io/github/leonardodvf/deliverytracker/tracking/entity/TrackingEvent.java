@@ -15,6 +15,9 @@ import java.util.UUID;
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
 public class TrackingEvent {
 
+    public static final String SOURCE_API = "API";
+    public static final String SOURCE_OPERATOR = "OPERATOR";
+
     @Id
     private UUID id;
     @ManyToOne(fetch = FetchType.LAZY, optional = false)
@@ -33,13 +36,25 @@ public class TrackingEvent {
     private String location;
 
     public static TrackingEvent initial(Shipment shipment) {
+        return of(shipment, ShipmentStatus.CREATED, shipment.getCreatedAt(), shipment.getCreatedAt(), SOURCE_API, null);
+    }
+
+    /** Records the status the shipment has just moved to; call after {@link Shipment#transitionTo}. */
+    public static TrackingEvent statusChange(Shipment shipment, String source, String location) {
+        var at = shipment.getUpdatedAt();
+        return of(shipment, shipment.getStatus(), at, at, source, location);
+    }
+
+    private static TrackingEvent of(Shipment shipment, ShipmentStatus status, Instant occurredAt,
+            Instant receivedAt, String source, String location) {
         var event = new TrackingEvent();
         event.id = UUID.randomUUID();
         event.shipment = shipment;
-        event.status = ShipmentStatus.CREATED;
-        event.occurredAt = shipment.getCreatedAt();
-        event.receivedAt = shipment.getCreatedAt();
-        event.source = "API";
+        event.status = status;
+        event.occurredAt = occurredAt;
+        event.receivedAt = receivedAt;
+        event.source = source;
+        event.location = location;
         return event;
     }
 }

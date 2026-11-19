@@ -65,7 +65,12 @@ public class OpenApiConfig {
                                 "detail", "Freight quote has expired; request a new quote")))
                 .addResponses("ShipmentNotFound", problemResponse("Shipment does not exist or belongs to another customer",
                         Map.of("type", "about:blank", "title", "Not Found", "status", 404,
-                                "detail", "Shipment not found")));
+                                "detail", "Shipment not found")))
+                .addResponses("InvalidStatusTransition", problemResponse(
+                        "Transition not allowed from the current status, or the shipment changed concurrently",
+                        Map.of("type", "about:blank", "title", "Conflict", "status", 409,
+                                "detail", "Cannot change shipment status from CREATED to DELIVERED",
+                                "currentStatus", "CREATED", "requestedStatus", "DELIVERED")));
         return new OpenAPI()
                 .info(new Info().title("Delivery Tracker API").version("v1")
                         .description("Shipment management and tracking API. Public registration always creates a CUSTOMER."))

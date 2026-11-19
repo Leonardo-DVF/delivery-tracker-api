@@ -1,6 +1,7 @@
 package io.github.leonardodvf.deliverytracker.shared.exception;
 
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.HttpStatusCode;
@@ -18,6 +19,13 @@ public class ApiExceptionHandler extends ResponseEntityExceptionHandler {
     @ExceptionHandler(DataIntegrityViolationException.class)
     ProblemDetail conflictingRecord(DataIntegrityViolationException exception) {
         return ProblemDetail.forStatusAndDetail(HttpStatus.CONFLICT, "Operation conflicts with an existing record");
+    }
+
+    /** Another request changed the same row first (@Version mismatch); the client can reload and retry. */
+    @ExceptionHandler(OptimisticLockingFailureException.class)
+    ProblemDetail concurrentModification(OptimisticLockingFailureException exception) {
+        return ProblemDetail.forStatusAndDetail(HttpStatus.CONFLICT,
+                "Resource was modified by another request; reload it and try again");
     }
 
     @Override
