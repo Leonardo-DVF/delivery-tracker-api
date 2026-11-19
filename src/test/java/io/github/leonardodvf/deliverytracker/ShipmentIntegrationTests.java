@@ -62,7 +62,7 @@ class ShipmentIntegrationTests extends JwtTestSupport {
         assertThat(stored.getStatus()).isEqualTo(ShipmentStatus.CREATED);
         assertThat(stored.getWeightKg()).isEqualByComparingTo("2.000");
         assertThat(stored.getLengthCm()).isEqualByComparingTo("30.00");
-        var history = events.findByShipmentIdOrderByOccurredAtAscReceivedAtAsc(response.id());
+        var history = events.findByShipmentIdOrderByReceivedAtAscOccurredAtAsc(response.id());
         assertThat(history).hasSize(1);
         assertThat(history.getFirst().getOccurredAt()).isEqualTo(stored.getCreatedAt());
         assertThat(history.getFirst().getStatus()).isEqualTo(ShipmentStatus.CREATED);

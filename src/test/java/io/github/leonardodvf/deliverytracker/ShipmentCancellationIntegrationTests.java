@@ -64,7 +64,7 @@ class ShipmentCancellationIntegrationTests extends JwtTestSupport {
         entityManager.clear();
 
         assertThat(shipments.findById(id).orElseThrow().getStatus()).isEqualTo(ShipmentStatus.CANCELED);
-        assertThat(events.findByShipmentIdOrderByOccurredAtAscReceivedAtAsc(id))
+        assertThat(events.findByShipmentIdOrderByReceivedAtAscOccurredAtAsc(id))
                 .extracting(TrackingEvent::getStatus, TrackingEvent::getSource)
                 .containsExactly(
                         tuple(ShipmentStatus.CREATED, "API"),

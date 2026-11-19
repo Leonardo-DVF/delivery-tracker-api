@@ -130,7 +130,7 @@ class TrackingServiceTests {
     void customerReadsHistoryOfOwnShipmentOnly() {
         var event = TrackingEvent.initial(shipment);
         when(shipments.existsByIdAndCustomerId(shipment.getId(), customer.getId())).thenReturn(true);
-        when(events.findByShipmentIdOrderByOccurredAtAscReceivedAtAsc(shipment.getId())).thenReturn(List.of(event));
+        when(events.findByShipmentIdOrderByReceivedAtAscOccurredAtAsc(shipment.getId())).thenReturn(List.of(event));
 
         assertThat(service.history(customer.getId(), shipment.getId()))
                 .extracting(TrackingEventResponse::id).containsExactly(event.getId());
@@ -149,7 +149,7 @@ class TrackingServiceTests {
     @Test
     void operatorReadsAnyHistoryButUnknownShipmentIsNotFound() {
         when(shipments.existsById(shipment.getId())).thenReturn(true);
-        when(events.findByShipmentIdOrderByOccurredAtAscReceivedAtAsc(shipment.getId())).thenReturn(List.of());
+        when(events.findByShipmentIdOrderByReceivedAtAscOccurredAtAsc(shipment.getId())).thenReturn(List.of());
 
         assertThat(service.history(operator.getId(), shipment.getId())).isEmpty();
         assertThatThrownBy(() -> service.history(operator.getId(), UUID.randomUUID()))
@@ -168,7 +168,7 @@ class TrackingServiceTests {
     void publicTrackingNormalizesCodeAndNeedsNoUser() {
         var event = TrackingEvent.initial(shipment);
         when(shipments.findByTrackingCode(shipment.getTrackingCode())).thenReturn(Optional.of(shipment));
-        when(events.findByShipmentIdOrderByOccurredAtAscReceivedAtAsc(shipment.getId())).thenReturn(List.of(event));
+        when(events.findByShipmentIdOrderByReceivedAtAscOccurredAtAsc(shipment.getId())).thenReturn(List.of(event));
 
         var result = service.publicTracking(shipment.getTrackingCode().toLowerCase(Locale.ROOT));
 

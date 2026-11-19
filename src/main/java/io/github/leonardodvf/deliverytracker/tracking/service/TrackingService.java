@@ -47,7 +47,11 @@ public class TrackingService {
         return TrackingEventResponse.from(event);
     }
 
-    /** Oldest first. Another customer's shipment is reported as missing so its existence is not revealed. */
+    /**
+     * In the order events were applied (receivedAt), which always follows the status sequence even when
+     * carrier clocks disagree; occurredAt breaks ties. Another customer's shipment is reported as missing
+     * so its existence is not revealed.
+     */
     @Transactional(readOnly = true)
     public List<TrackingEventResponse> history(UUID userId, UUID shipmentId) {
         var user = authenticatedUser(userId);
@@ -58,7 +62,7 @@ public class TrackingService {
         if (!visible) {
             throw new ShipmentNotFoundException();
         }
-        return events.findByShipmentIdOrderByOccurredAtAscReceivedAtAsc(shipmentId).stream()
+        return events.findByShipmentIdOrderByReceivedAtAscOccurredAtAsc(shipmentId).stream()
                 .map(TrackingEventResponse::from).toList();
     }
 
@@ -68,7 +72,7 @@ public class TrackingService {
         var shipment = shipments.findByTrackingCode(trackingCode.toUpperCase(Locale.ROOT))
                 .orElseThrow(ShipmentNotFoundException::new);
         return PublicTrackingResponse.from(shipment,
-                events.findByShipmentIdOrderByOccurredAtAscReceivedAtAsc(shipment.getId()));
+                events.findByShipmentIdOrderByReceivedAtAscOccurredAtAsc(shipment.getId()));
     }
 
     private User authenticatedUser(UUID userId) {

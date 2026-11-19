@@ -6,7 +6,7 @@ import java.util.List;
 import java.util.UUID;
 
 public interface TrackingEventRepository extends JpaRepository<TrackingEvent, UUID> {
-    List<TrackingEvent> findByShipmentIdOrderByOccurredAtAscReceivedAtAsc(UUID shipmentId);
+    List<TrackingEvent> findByShipmentIdOrderByReceivedAtAscOccurredAtAsc(UUID shipmentId);
 
     boolean existsByCarrierEventId(String carrierEventId);
 }

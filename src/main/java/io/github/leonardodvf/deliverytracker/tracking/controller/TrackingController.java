@@ -51,7 +51,7 @@ public class TrackingController {
     @GetMapping("/shipments/{id}/events")
     @SecurityRequirement(name = "bearerAuth")
     @Operation(summary = "Get a shipment's tracking history",
-            description = "All events, oldest first. CUSTOMER can read only their own shipments; another customer's "
+            description = "All events in the order they were applied. CUSTOMER can read only their own shipments; another customer's "
                     + "shipment returns 404. OPERATOR can read any.")
     @ApiResponses({
         @ApiResponse(responseCode = "200", description = "Tracking history"),

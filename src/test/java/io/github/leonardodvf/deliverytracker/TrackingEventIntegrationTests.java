@@ -20,6 +20,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.jdbc.Sql;
 import org.springframework.transaction.annotation.Transactional;
 import java.math.BigDecimal;
@@ -42,6 +43,7 @@ class TrackingEventIntegrationTests extends JwtTestSupport {
     @Autowired private TrackingEventRepository events;
     @Autowired private UserRepository users;
     @Autowired private EntityManager entityManager;
+    @Autowired private JdbcTemplate jdbc;
 
     private User customer;
     private User operator;
@@ -67,12 +69,23 @@ class TrackingEventIntegrationTests extends JwtTestSupport {
         var stored = shipments.findById(shipmentId).orElseThrow();
         assertThat(stored.getStatus()).isEqualTo(ShipmentStatus.DELIVERED);
         assertThat(stored.getVersion()).isEqualTo(4);
-        var history = events.findByShipmentIdOrderByOccurredAtAscReceivedAtAsc(shipmentId);
+        var history = events.findByShipmentIdOrderByReceivedAtAscOccurredAtAsc(shipmentId);
         assertThat(history).extracting(TrackingEvent::getStatus).containsExactly(ShipmentStatus.CREATED,
                 ShipmentStatus.PICKED_UP, ShipmentStatus.IN_TRANSIT, ShipmentStatus.OUT_FOR_DELIVERY, ShipmentStatus.DELIVERED);
         assertThat(history).extracting(TrackingEvent::getSource).containsExactly("API", "OPERATOR", "OPERATOR", "OPERATOR", "OPERATOR");
         assertThat(history.get(1).getLocation()).isEqualTo("Rio de Janeiro hub");
         assertThat(history.getLast().getOccurredAt()).isEqualTo(stored.getUpdatedAt());
+    }
+
+    @Test
+    void listsHistoryInTheOrderEventsWereAppliedEvenWhenOccurredAtDisagrees() {
+        record(ShipmentStatus.PICKED_UP, null);
+        // A source with a lagging clock reports a time before the shipment was even created.
+        jdbc.update("UPDATE tracking_events SET occurred_at = occurred_at - interval '1 day' WHERE shipment_id = ? AND status = 'PICKED_UP'",
+                shipmentId);
+
+        assertThat(events.findByShipmentIdOrderByReceivedAtAscOccurredAtAsc(shipmentId))
+                .extracting(TrackingEvent::getStatus).containsExactly(ShipmentStatus.CREATED, ShipmentStatus.PICKED_UP);
     }
 
     @Test
@@ -82,7 +95,7 @@ class TrackingEventIntegrationTests extends JwtTestSupport {
         entityManager.clear();
 
         assertThat(shipments.findById(shipmentId).orElseThrow().getStatus()).isEqualTo(ShipmentStatus.CREATED);
-        assertThat(events.findByShipmentIdOrderByOccurredAtAscReceivedAtAsc(shipmentId)).hasSize(1);
+        assertThat(events.findByShipmentIdOrderByReceivedAtAscOccurredAtAsc(shipmentId)).hasSize(1);
     }
 
     @Test
