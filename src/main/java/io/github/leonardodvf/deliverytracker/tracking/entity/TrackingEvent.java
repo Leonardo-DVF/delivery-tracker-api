@@ -17,6 +17,7 @@ public class TrackingEvent {
 
     public static final String SOURCE_API = "API";
     public static final String SOURCE_OPERATOR = "OPERATOR";
+    public static final String SOURCE_CUSTOMER = "CUSTOMER";
 
     @Id
     private UUID id;

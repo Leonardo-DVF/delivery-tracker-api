@@ -78,4 +78,19 @@ public class ShipmentController {
     public ShipmentResponse get(@Parameter(hidden = true) @AuthenticationPrincipal Jwt jwt, @PathVariable UUID id) {
         return shipments.get(UUID.fromString(jwt.getSubject()), id);
     }
+
+    @PostMapping("/{id}/cancel")
+    @Operation(summary = "Cancel a shipment",
+            description = "CUSTOMER can cancel their own shipment only while it is CREATED (before pickup). "
+                    + "OPERATOR can cancel any shipment up to IN_TRANSIT. Records a CANCELED tracking event.")
+    @ApiResponses({
+        @ApiResponse(responseCode = "200", description = "Shipment canceled"),
+        @ApiResponse(responseCode = "400", ref = "#/components/responses/BadRequest"),
+        @ApiResponse(responseCode = "401", ref = "#/components/responses/Unauthorized"),
+        @ApiResponse(responseCode = "404", ref = "#/components/responses/ShipmentNotFound"),
+        @ApiResponse(responseCode = "409", ref = "#/components/responses/InvalidStatusTransition")
+    })
+    public ShipmentResponse cancel(@Parameter(hidden = true) @AuthenticationPrincipal Jwt jwt, @PathVariable UUID id) {
+        return shipments.cancel(UUID.fromString(jwt.getSubject()), id);
+    }
 }

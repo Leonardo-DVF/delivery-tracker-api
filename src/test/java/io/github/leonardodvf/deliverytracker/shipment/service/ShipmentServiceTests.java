@@ -5,7 +5,9 @@ import io.github.leonardodvf.deliverytracker.freight.repository.FreightQuoteRepo
 import io.github.leonardodvf.deliverytracker.shipment.dto.ShipmentResponse;
 import io.github.leonardodvf.deliverytracker.shipment.entity.Shipment;
 import io.github.leonardodvf.deliverytracker.shipment.entity.ShipmentStatus;
+import io.github.leonardodvf.deliverytracker.shipment.exception.CancellationNotAllowedException;
 import io.github.leonardodvf.deliverytracker.shipment.exception.DestinationMismatchException;
+import io.github.leonardodvf.deliverytracker.shipment.exception.InvalidStatusTransitionException;
 import io.github.leonardodvf.deliverytracker.shipment.exception.FreightQuoteAlreadyUsedException;
 import io.github.leonardodvf.deliverytracker.shipment.exception.FreightQuoteExpiredException;
 import io.github.leonardodvf.deliverytracker.shipment.exception.FreightQuoteNotFoundException;
@@ -244,6 +246,71 @@ class ShipmentServiceTests {
         assertThatThrownBy(() -> service.list(unknown, null, 0, 20)).isInstanceOf(ResponseStatusException.class);
         assertThatThrownBy(() -> service.get(unknown, UUID.randomUUID())).isInstanceOf(ResponseStatusException.class);
         verifyNoInteractions(shipments);
+    }
+
+    @Test
+    void customerCancelsOwnShipmentBeforePickupAndRecordsEvent() {
+        var stored = shipment();
+        when(shipments.findByIdAndCustomerId(stored.getId(), customer.getId())).thenReturn(Optional.of(stored));
+
+        var result = service.cancel(customer.getId(), stored.getId());
+
+        assertThat(result.status()).isEqualTo(ShipmentStatus.CANCELED);
+        assertThat(result.updatedAt()).isEqualTo(now);
+        var event = ArgumentCaptor.forClass(TrackingEvent.class);
+        var order = inOrder(shipments, events);
+        order.verify(shipments).saveAndFlush(stored);
+        order.verify(events).save(event.capture());
+        assertThat(event.getValue().getStatus()).isEqualTo(ShipmentStatus.CANCELED);
+        assertThat(event.getValue().getSource()).isEqualTo("CUSTOMER");
+        verify(shipments, never()).findById(any());
+    }
+
+    @Test
+    void customerCannotCancelAfterPickup() {
+        var stored = shipment();
+        stored.transitionTo(ShipmentStatus.PICKED_UP, now);
+        when(shipments.findByIdAndCustomerId(stored.getId(), customer.getId())).thenReturn(Optional.of(stored));
+
+        assertThatThrownBy(() -> service.cancel(customer.getId(), stored.getId()))
+                .isInstanceOf(CancellationNotAllowedException.class)
+                .extracting(ex -> ((CancellationNotAllowedException) ex).getStatusCode().value()).isEqualTo(409);
+        assertThat(stored.getStatus()).isEqualTo(ShipmentStatus.PICKED_UP);
+        verify(shipments, never()).saveAndFlush(any());
+        verifyNoInteractions(events);
+    }
+
+    @Test
+    void customerCannotCancelAnotherCustomersShipment() {
+        var id = UUID.randomUUID();
+        when(shipments.findByIdAndCustomerId(id, customer.getId())).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.cancel(customer.getId(), id)).isInstanceOf(ShipmentNotFoundException.class);
+        verify(shipments, never()).findById(any());
+        verifyNoInteractions(events);
+    }
+
+    @Test
+    void operatorCancelsInTransitShipmentButNotOneOutForDelivery() {
+        var operator = new User("Operator", "operator@example.test", "hash", UserRole.OPERATOR);
+        when(users.findById(operator.getId())).thenReturn(Optional.of(operator));
+        var inTransit = shipment();
+        inTransit.transitionTo(ShipmentStatus.PICKED_UP, now);
+        inTransit.transitionTo(ShipmentStatus.IN_TRANSIT, now);
+        var outForDelivery = shipment();
+        outForDelivery.transitionTo(ShipmentStatus.PICKED_UP, now);
+        outForDelivery.transitionTo(ShipmentStatus.IN_TRANSIT, now);
+        outForDelivery.transitionTo(ShipmentStatus.OUT_FOR_DELIVERY, now);
+        when(shipments.findById(inTransit.getId())).thenReturn(Optional.of(inTransit));
+        when(shipments.findById(outForDelivery.getId())).thenReturn(Optional.of(outForDelivery));
+
+        assertThat(service.cancel(operator.getId(), inTransit.getId()).status()).isEqualTo(ShipmentStatus.CANCELED);
+        var event = ArgumentCaptor.forClass(TrackingEvent.class);
+        verify(events).save(event.capture());
+        assertThat(event.getValue().getSource()).isEqualTo("OPERATOR");
+        assertThatThrownBy(() -> service.cancel(operator.getId(), outForDelivery.getId()))
+                .isInstanceOf(InvalidStatusTransitionException.class);
+        verify(shipments, never()).findByIdAndCustomerId(any(), any());
     }
 
     private Shipment shipment() {

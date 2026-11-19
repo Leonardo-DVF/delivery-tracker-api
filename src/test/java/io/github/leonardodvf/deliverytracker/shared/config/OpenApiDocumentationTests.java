@@ -53,7 +53,8 @@ class OpenApiDocumentationTests {
         assertThat(spec.path("info").path("title").asText()).isEqualTo("Delivery Tracker API");
         assertThat(spec.path("paths").properties().stream().map(Map.Entry::getKey).toList())
                 .containsExactlyInAnyOrder("/api/v1/auth/register", "/api/v1/auth/login", "/api/v1/users/me",
-                        "/api/v1/freight/quotes", "/api/v1/shipments", "/api/v1/shipments/{id}");
+                        "/api/v1/freight/quotes", "/api/v1/shipments", "/api/v1/shipments/{id}",
+                        "/api/v1/shipments/{id}/cancel");
         verifyNoInteractions(registration, login, users, decoder, freight, shipments);
     }
 
@@ -138,6 +139,9 @@ class OpenApiDocumentationTests {
                 .containsExactlyInAnyOrder("status", "page", "size");
         assertThat(spec.at("/paths/~1api~1v1~1shipments~1{id}/get/responses/404/$ref").asText())
                 .isEqualTo("#/components/responses/ShipmentNotFound");
+        assertThat(spec.at("/paths/~1api~1v1~1shipments~1{id}~1cancel/post/responses/409/$ref").asText())
+                .isEqualTo("#/components/responses/InvalidStatusTransition");
+        assertThat(spec.at("/paths/~1api~1v1~1shipments~1{id}~1cancel/post/security/0").has("bearerAuth")).isTrue();
     }
 
     @Test

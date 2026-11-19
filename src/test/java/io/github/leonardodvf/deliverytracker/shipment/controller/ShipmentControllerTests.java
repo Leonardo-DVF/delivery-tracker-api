@@ -232,6 +232,47 @@ class ShipmentControllerTests {
         verifyNoInteractions(shipments);
     }
 
+    @ParameterizedTest
+    @ValueSource(strings = {"CUSTOMER", "OPERATOR"})
+    void cancelsShipmentForTokenSubject(String role) throws Exception {
+        var item = sampleResponse();
+        when(shipments.cancel(customerId, item.id())).thenReturn(item);
+
+        mvc.perform(post("/api/v1/shipments/" + item.id() + "/cancel").with(authenticated(role)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.id").value(item.id().toString()));
+        verify(shipments).cancel(customerId, item.id());
+    }
+
+    @ParameterizedTest
+    @MethodSource("cancellationFailures")
+    void reportsCancellationFailuresAsProblemDetails(ErrorResponseException failure, int expectedStatus) throws Exception {
+        var id = UUID.randomUUID();
+        when(shipments.cancel(customerId, id)).thenThrow(failure);
+
+        mvc.perform(post("/api/v1/shipments/" + id + "/cancel").with(authenticated("CUSTOMER")))
+                .andExpect(status().is(expectedStatus))
+                .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON))
+                .andExpect(jsonPath("$.detail").value(failure.getBody().getDetail()));
+    }
+
+    static Stream<Arguments> cancellationFailures() {
+        return Stream.of(
+                Arguments.of(new ShipmentNotFoundException(), 404),
+                Arguments.of(new CancellationNotAllowedException(ShipmentStatus.PICKED_UP), 409),
+                Arguments.of(new InvalidStatusTransitionException(ShipmentStatus.DELIVERED, ShipmentStatus.CANCELED), 409));
+    }
+
+    @Test
+    void cancellationRequiresAuthenticationAndAKnownRole() throws Exception {
+        var path = "/api/v1/shipments/" + UUID.randomUUID() + "/cancel";
+        mvc.perform(post(path)).andExpect(status().isUnauthorized());
+        mvc.perform(post(path).with(authenticated("ADMIN"))).andExpect(status().isForbidden());
+        mvc.perform(post("/api/v1/shipments/not-a-uuid/cancel").with(authenticated("CUSTOMER")))
+                .andExpect(status().isBadRequest());
+        verifyNoInteractions(shipments);
+    }
+
     private ShipmentResponse sampleResponse() {
         var owner = new User("Owner", "owner@example.test", "hash", UserRole.CUSTOMER);
         var quote = quote(owner);

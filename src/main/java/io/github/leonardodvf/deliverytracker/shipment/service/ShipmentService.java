@@ -6,6 +6,7 @@ import io.github.leonardodvf.deliverytracker.shipment.dto.CreateShipmentRequest;
 import io.github.leonardodvf.deliverytracker.shipment.dto.ShipmentResponse;
 import io.github.leonardodvf.deliverytracker.shipment.entity.Shipment;
 import io.github.leonardodvf.deliverytracker.shipment.entity.ShipmentStatus;
+import io.github.leonardodvf.deliverytracker.shipment.exception.CancellationNotAllowedException;
 import io.github.leonardodvf.deliverytracker.shipment.exception.DestinationMismatchException;
 import io.github.leonardodvf.deliverytracker.shipment.exception.FreightQuoteAlreadyUsedException;
 import io.github.leonardodvf.deliverytracker.shipment.exception.FreightQuoteExpiredException;
@@ -93,6 +94,28 @@ public class ShipmentService {
             case OPERATOR -> shipments.findById(shipmentId);
         };
         return shipment.map(ShipmentResponse::from).orElseThrow(ShipmentNotFoundException::new);
+    }
+
+    /**
+     * Customers may cancel their own shipment only before pickup; operators may cancel any shipment
+     * the state machine allows (until it is out for delivery).
+     */
+    @Transactional
+    public ShipmentResponse cancel(UUID userId, UUID shipmentId) {
+        var user = authenticatedUser(userId);
+        var shipment = switch (user.getRole()) {
+            case CUSTOMER -> shipments.findByIdAndCustomerId(shipmentId, userId);
+            case OPERATOR -> shipments.findById(shipmentId);
+        };
+        var found = shipment.orElseThrow(ShipmentNotFoundException::new);
+        if (user.getRole() == UserRole.CUSTOMER && found.getStatus() != ShipmentStatus.CREATED) {
+            throw new CancellationNotAllowedException(found.getStatus());
+        }
+        found.transitionTo(ShipmentStatus.CANCELED, clock.instant());
+        shipments.saveAndFlush(found);
+        var source = user.getRole() == UserRole.CUSTOMER ? TrackingEvent.SOURCE_CUSTOMER : TrackingEvent.SOURCE_OPERATOR;
+        events.save(TrackingEvent.statusChange(found, source, null));
+        return ShipmentResponse.from(found);
     }
 
     private User authenticatedUser(UUID userId) {
