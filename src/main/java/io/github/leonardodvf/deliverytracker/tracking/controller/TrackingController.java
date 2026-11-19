@@ -15,6 +15,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.web.bind.annotation.*;
+import java.util.List;
 import java.util.UUID;
 
 @RestController
@@ -43,5 +44,21 @@ public class TrackingController {
     public TrackingEventResponse record(@Parameter(hidden = true) @AuthenticationPrincipal Jwt jwt,
             @PathVariable UUID id, @Valid @RequestBody RecordTrackingEventRequest request) {
         return tracking.record(UUID.fromString(jwt.getSubject()), id, request);
+    }
+
+    @GetMapping("/shipments/{id}/events")
+    @SecurityRequirement(name = "bearerAuth")
+    @Operation(summary = "Get a shipment's tracking history",
+            description = "All events, oldest first. CUSTOMER can read only their own shipments; another customer's "
+                    + "shipment returns 404. OPERATOR can read any.")
+    @ApiResponses({
+        @ApiResponse(responseCode = "200", description = "Tracking history"),
+        @ApiResponse(responseCode = "400", ref = "#/components/responses/BadRequest"),
+        @ApiResponse(responseCode = "401", ref = "#/components/responses/Unauthorized"),
+        @ApiResponse(responseCode = "404", ref = "#/components/responses/ShipmentNotFound")
+    })
+    public List<TrackingEventResponse> history(@Parameter(hidden = true) @AuthenticationPrincipal Jwt jwt,
+            @PathVariable UUID id) {
+        return tracking.history(UUID.fromString(jwt.getSubject()), id);
     }
 }

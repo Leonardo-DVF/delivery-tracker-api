@@ -6,6 +6,7 @@ import io.github.leonardodvf.deliverytracker.shipment.exception.InvalidStatusTra
 import io.github.leonardodvf.deliverytracker.shipment.exception.ShipmentNotFoundException;
 import io.github.leonardodvf.deliverytracker.shipment.repository.ShipmentRepository;
 import io.github.leonardodvf.deliverytracker.tracking.dto.RecordTrackingEventRequest;
+import io.github.leonardodvf.deliverytracker.tracking.dto.TrackingEventResponse;
 import io.github.leonardodvf.deliverytracker.tracking.entity.TrackingEvent;
 import io.github.leonardodvf.deliverytracker.tracking.repository.TrackingEventRepository;
 import io.github.leonardodvf.deliverytracker.user.entity.User;
@@ -20,6 +21,7 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -119,6 +121,44 @@ class TrackingServiceTests {
                 new RecordTrackingEventRequest(ShipmentStatus.PICKED_UP, null)))
                 .isInstanceOf(ResponseStatusException.class)
                 .extracting(ex -> ((ResponseStatusException) ex).getStatusCode().value()).isEqualTo(401);
+        verifyNoInteractions(shipments, events);
+    }
+
+    @Test
+    void customerReadsHistoryOfOwnShipmentOnly() {
+        var event = TrackingEvent.initial(shipment);
+        when(shipments.existsByIdAndCustomerId(shipment.getId(), customer.getId())).thenReturn(true);
+        when(events.findByShipmentIdOrderByOccurredAtAscReceivedAtAsc(shipment.getId())).thenReturn(List.of(event));
+
+        assertThat(service.history(customer.getId(), shipment.getId()))
+                .extracting(TrackingEventResponse::id).containsExactly(event.getId());
+        verify(shipments, never()).existsById(any());
+    }
+
+    @Test
+    void customerGetsNotFoundForAnotherCustomersHistory() {
+        var foreign = UUID.randomUUID();
+        when(shipments.existsByIdAndCustomerId(foreign, customer.getId())).thenReturn(false);
+
+        assertThatThrownBy(() -> service.history(customer.getId(), foreign)).isInstanceOf(ShipmentNotFoundException.class);
+        verifyNoInteractions(events);
+    }
+
+    @Test
+    void operatorReadsAnyHistoryButUnknownShipmentIsNotFound() {
+        when(shipments.existsById(shipment.getId())).thenReturn(true);
+        when(events.findByShipmentIdOrderByOccurredAtAscReceivedAtAsc(shipment.getId())).thenReturn(List.of());
+
+        assertThat(service.history(operator.getId(), shipment.getId())).isEmpty();
+        assertThatThrownBy(() -> service.history(operator.getId(), UUID.randomUUID()))
+                .isInstanceOf(ShipmentNotFoundException.class);
+        verify(shipments, never()).existsByIdAndCustomerId(any(), any());
+    }
+
+    @Test
+    void historyRejectsDeletedUsers() {
+        assertThatThrownBy(() -> service.history(UUID.randomUUID(), shipment.getId()))
+                .isInstanceOf(ResponseStatusException.class);
         verifyNoInteractions(shipments, events);
     }
 }

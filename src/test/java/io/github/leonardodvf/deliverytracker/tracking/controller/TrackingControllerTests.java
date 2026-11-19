@@ -24,11 +24,13 @@ import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.ResultActions;
 import org.springframework.test.web.servlet.request.RequestPostProcessor;
 import java.time.Instant;
+import java.util.List;
 import java.util.UUID;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.jwt;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
@@ -126,6 +128,38 @@ class TrackingControllerTests {
         mvc.perform(post("/api/v1/shipments/not-a-uuid/events").with(as("OPERATOR"))
                         .contentType(MediaType.APPLICATION_JSON).content("{\"status\":\"PICKED_UP\"}"))
                 .andExpect(status().isBadRequest());
+        verifyNoInteractions(tracking);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"CUSTOMER", "OPERATOR"})
+    void returnsHistoryForTokenSubject(String role) throws Exception {
+        var at = Instant.parse("2026-11-19T10:00:00Z");
+        when(tracking.history(userId, shipmentId)).thenReturn(List.of(
+                new TrackingEventResponse(UUID.randomUUID(), ShipmentStatus.CREATED, at, at, "API", null),
+                new TrackingEventResponse(UUID.randomUUID(), ShipmentStatus.PICKED_UP, at.plusSeconds(60),
+                        at.plusSeconds(60), "OPERATOR", "Rio hub")));
+
+        mvc.perform(get("/api/v1/shipments/" + shipmentId + "/events").with(as(role)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(2))
+                .andExpect(jsonPath("$[0].status").value("CREATED"))
+                .andExpect(jsonPath("$[1].location").value("Rio hub"));
+    }
+
+    @Test
+    void historyOfMissingOrForeignShipmentIsNotFound() throws Exception {
+        when(tracking.history(userId, shipmentId)).thenThrow(new ShipmentNotFoundException());
+
+        mvc.perform(get("/api/v1/shipments/" + shipmentId + "/events").with(as("CUSTOMER")))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.detail").value("Shipment not found"));
+    }
+
+    @Test
+    void historyRequiresAuthenticationAndAKnownRole() throws Exception {
+        mvc.perform(get("/api/v1/shipments/" + shipmentId + "/events")).andExpect(status().isUnauthorized());
+        mvc.perform(get("/api/v1/shipments/" + shipmentId + "/events").with(as("ADMIN"))).andExpect(status().isForbidden());
         verifyNoInteractions(tracking);
     }
 

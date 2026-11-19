@@ -6,6 +6,7 @@ import io.github.leonardodvf.deliverytracker.tracking.dto.RecordTrackingEventReq
 import io.github.leonardodvf.deliverytracker.tracking.dto.TrackingEventResponse;
 import io.github.leonardodvf.deliverytracker.tracking.entity.TrackingEvent;
 import io.github.leonardodvf.deliverytracker.tracking.repository.TrackingEventRepository;
+import io.github.leonardodvf.deliverytracker.user.entity.User;
 import io.github.leonardodvf.deliverytracker.user.entity.UserRole;
 import io.github.leonardodvf.deliverytracker.user.repository.UserRepository;
 import lombok.RequiredArgsConstructor;
@@ -14,6 +15,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 import java.time.Clock;
+import java.util.List;
 import java.util.UUID;
 
 @Service
@@ -31,8 +33,7 @@ public class TrackingService {
      */
     @Transactional
     public TrackingEventResponse record(UUID operatorId, UUID shipmentId, RecordTrackingEventRequest request) {
-        var user = users.findById(operatorId).orElseThrow(() ->
-                new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Authenticated user no longer exists"));
+        var user = authenticatedUser(operatorId);
         if (user.getRole() != UserRole.OPERATOR) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Only operators can record tracking events");
         }
@@ -42,5 +43,25 @@ public class TrackingService {
         shipments.saveAndFlush(shipment);
         var event = events.save(TrackingEvent.statusChange(shipment, TrackingEvent.SOURCE_OPERATOR, request.location()));
         return TrackingEventResponse.from(event);
+    }
+
+    /** Oldest first. Another customer's shipment is reported as missing so its existence is not revealed. */
+    @Transactional(readOnly = true)
+    public List<TrackingEventResponse> history(UUID userId, UUID shipmentId) {
+        var user = authenticatedUser(userId);
+        var visible = switch (user.getRole()) {
+            case CUSTOMER -> shipments.existsByIdAndCustomerId(shipmentId, userId);
+            case OPERATOR -> shipments.existsById(shipmentId);
+        };
+        if (!visible) {
+            throw new ShipmentNotFoundException();
+        }
+        return events.findByShipmentIdOrderByOccurredAtAscReceivedAtAsc(shipmentId).stream()
+                .map(TrackingEventResponse::from).toList();
+    }
+
+    private User authenticatedUser(UUID userId) {
+        return users.findById(userId).orElseThrow(() ->
+                new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Authenticated user no longer exists"));
     }
 }

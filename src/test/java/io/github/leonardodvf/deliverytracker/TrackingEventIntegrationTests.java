@@ -3,9 +3,11 @@ package io.github.leonardodvf.deliverytracker;
 import io.github.leonardodvf.deliverytracker.freight.service.FreightService;
 import io.github.leonardodvf.deliverytracker.shipment.entity.ShipmentStatus;
 import io.github.leonardodvf.deliverytracker.shipment.exception.InvalidStatusTransitionException;
+import io.github.leonardodvf.deliverytracker.shipment.exception.ShipmentNotFoundException;
 import io.github.leonardodvf.deliverytracker.shipment.repository.ShipmentRepository;
 import io.github.leonardodvf.deliverytracker.shipment.service.ShipmentService;
 import io.github.leonardodvf.deliverytracker.tracking.dto.RecordTrackingEventRequest;
+import io.github.leonardodvf.deliverytracker.tracking.dto.TrackingEventResponse;
 import io.github.leonardodvf.deliverytracker.tracking.entity.TrackingEvent;
 import io.github.leonardodvf.deliverytracker.tracking.repository.TrackingEventRepository;
 import io.github.leonardodvf.deliverytracker.tracking.service.TrackingService;
@@ -41,12 +43,13 @@ class TrackingEventIntegrationTests extends JwtTestSupport {
     @Autowired private UserRepository users;
     @Autowired private EntityManager entityManager;
 
+    private User customer;
     private User operator;
     private UUID shipmentId;
 
     @BeforeEach
     void createShipment() {
-        var customer = users.saveAndFlush(new User("Owner", "owner@example.test", "hash", UserRole.CUSTOMER));
+        customer = users.saveAndFlush(new User("Owner", "owner@example.test", "hash", UserRole.CUSTOMER));
         operator = users.saveAndFlush(new User("Operator", "operator@example.test", "hash", UserRole.OPERATOR));
         var quote = freight.createQuote(customer.getId(), "01000000", new BigDecimal("2"));
         shipmentId = shipmentService.create(customer.getId(), request(quote.getId())).id();
@@ -90,6 +93,20 @@ class TrackingEventIntegrationTests extends JwtTestSupport {
         record(ShipmentStatus.DELIVERED, null);
 
         assertThatThrownBy(() -> record(ShipmentStatus.CANCELED, null)).isInstanceOf(InvalidStatusTransitionException.class);
+    }
+
+    @Test
+    void ownerAndOperatorReadTheHistoryButOtherCustomersCannot() {
+        record(ShipmentStatus.PICKED_UP, "Rio de Janeiro hub");
+        var stranger = users.saveAndFlush(new User("Stranger", "stranger@example.test", "hash", UserRole.CUSTOMER));
+
+        assertThat(tracking.history(customer.getId(), shipmentId)).extracting(TrackingEventResponse::status)
+                .containsExactly(ShipmentStatus.CREATED, ShipmentStatus.PICKED_UP);
+        assertThat(tracking.history(operator.getId(), shipmentId)).hasSize(2);
+        assertThatThrownBy(() -> tracking.history(stranger.getId(), shipmentId))
+                .isInstanceOf(ShipmentNotFoundException.class);
+        assertThatThrownBy(() -> tracking.history(operator.getId(), UUID.randomUUID()))
+                .isInstanceOf(ShipmentNotFoundException.class);
     }
 
     private void record(ShipmentStatus status, String location) {

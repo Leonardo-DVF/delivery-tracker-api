@@ -55,7 +55,7 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.POST, "/api/v1/shipments").hasRole("CUSTOMER")
                         .requestMatchers(HttpMethod.POST, "/api/v1/shipments/*/events").hasRole("OPERATOR")
                         .requestMatchers(HttpMethod.POST, "/api/v1/shipments/*/cancel").hasAnyRole("CUSTOMER", "OPERATOR")
-                        .requestMatchers(HttpMethod.GET, "/api/v1/shipments", "/api/v1/shipments/*")
+                        .requestMatchers(HttpMethod.GET, "/api/v1/shipments", "/api/v1/shipments/*", "/api/v1/shipments/*/events")
                                 .hasAnyRole("CUSTOMER", "OPERATOR")
                         .anyRequest().denyAll())
                 .oauth2ResourceServer(resource -> resource
