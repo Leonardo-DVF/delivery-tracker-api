@@ -13,7 +13,9 @@ A cotação de frete usa tarifas fictícias por CEP e peso, calculadas pelo back
 e fica armazenada com validade para travar o preço.
 Clientes criam entregas a partir de uma cotação, com código de rastreamento único e
 evento inicial; cada cliente consulta só as próprias entregas e operadores consultam todas.
-Ciclo de vida, rastreamento público, webhooks e notificações virão nas próximas etapas.
+Operadores evoluem o status por uma máquina de estados com histórico de eventos,
+clientes cancelam antes da coleta e qualquer pessoa acompanha a entrega pelo código.
+Webhooks de transportadoras e notificações virão nas próximas etapas.
 
 ## Tecnologias
 
@@ -286,9 +288,9 @@ A documentação usa `springdoc-openapi-starter-webmvc-ui` 3.1.1, compatível co
 Sua versão é explícita porque essa biblioteca não é gerenciada pelo BOM do Spring Boot.
 As demais dependências continuam usando o gerenciamento de versões do projeto.
 
-O contrato descreve as sete operações atuais, validações, campos aceitos e respostas
-de sucesso e erro. Cadastro e login são públicos; perfil, cotação e entregas exigem
-`bearerAuth`. A especificação mostra DTOs e esconde o principal JWT injetado,
+O contrato descreve as onze operações atuais, validações, campos aceitos e respostas
+de sucesso e erro. Cadastro, login e rastreamento por código são públicos; perfil,
+cotação, entregas e eventos exigem `bearerAuth`. A especificação mostra DTOs e esconde o principal JWT injetado,
 campos calculados de validação e detalhes das entidades persistidas.
 As senhas são marcadas como `writeOnly` e o formato de erros é `application/problem+json`.
 Os exemplos usam dados fictícios e não configuram credenciais na aplicação.
@@ -463,12 +465,12 @@ Uma transação salva a entrega e seu evento inicial `CREATED`, com origem `API`
 sem localização e com instantes de ocorrência e recebimento iguais ao da criação.
 Falhas ao persistir o evento também revertem a entrega. Os status aceitos pelo banco
 são `CREATED`, `PICKED_UP`, `IN_TRANSIT`, `OUT_FOR_DELIVERY`, `DELIVERED` e `CANCELED`;
-as transições entre eles serão implementadas na próxima etapa.
+as transições estão descritas em [Ciclo de vida e rastreamento](#ciclo-de-vida-e-rastreamento).
 
 O código de rastreamento usa um UUID aleatório independente (122 bits aleatórios),
 representado por 32 caracteres hexadecimais maiúsculos, com unicidade garantida no
 PostgreSQL. Uma colisão gera `409` e reverte a transação; não há tentativa automática.
-A entidade possui `@Version` para as futuras atualizações concorrentes.
+A entidade possui `@Version`, usado nas mudanças de status concorrentes.
 
 ## Consulta de entregas
 
@@ -497,8 +499,9 @@ A ordem coincide com os índices `(customer_id, created_at DESC, id)` e
 `(status, created_at DESC, id)` da V4. Ordenação livre não é aceita, para evitar
 consultas sem índice e não expor nomes internos da entidade.
 
-Consulta pública por código de rastreamento, cancelamento e evolução do status serão
-implementados na próxima etapa. O envio de e-mail será incluído na etapa de notificações.
+Mudanças de status, cancelamento e consulta pública estão em
+[Ciclo de vida e rastreamento](#ciclo-de-vida-e-rastreamento).
+O envio de e-mail será incluído na etapa de notificações.
 
 Para verificar criação, consultas, validação, autorização e regras do serviço sem Docker:
 
@@ -511,4 +514,80 @@ clientes, paginação e o uso único da cotação sob concorrência:
 
 ```powershell
 .\mvnw.cmd "-Dtest=ShipmentIntegrationTests,ShipmentQueryIntegrationTests,ShipmentQuoteConcurrencyIntegrationTests" test
+```
+
+## Ciclo de vida e rastreamento
+
+O status de uma entrega segue uma máquina de estados:
+
+```
+CREATED → PICKED_UP → IN_TRANSIT → OUT_FOR_DELIVERY → DELIVERED
+   └──────────┴────────────┴──→ CANCELED
+```
+
+Só é possível avançar um passo por vez. `CANCELED` é aceito até `IN_TRANSIT`;
+`DELIVERED` e `CANCELED` são finais. A regra fica em `ShipmentStatus.canTransitionTo`,
+com um `switch` exaustivo: um status novo não compila até ter suas transições definidas.
+`Shipment.transitionTo` é a única forma de mudar o status, então qualquer caminho
+(API, futuros webhooks) obedece à mesma regra. Uma transição inválida responde `409`
+com `currentStatus` e `requestedStatus` no Problem Details.
+
+| Método | Rota | Quem | Efeito |
+| --- | --- | --- | --- |
+| `POST` | `/api/v1/shipments/{id}/events` | `OPERATOR` | Muda o status e registra um evento |
+| `POST` | `/api/v1/shipments/{id}/cancel` | `CUSTOMER` (própria) ou `OPERATOR` | Cancela e registra um evento |
+| `GET` | `/api/v1/shipments/{id}/events` | Mesmo escopo de `GET /{id}` | Histórico, do mais antigo ao mais recente |
+| `GET` | `/api/v1/tracking/{trackingCode}` | Público | Status, cidade/UF de destino e linha do tempo |
+
+No exemplo, `$operatorSession` é a resposta do login de um operador, criado como em
+[Operador no ambiente local](#operador-no-ambiente-local), e `$shipment` é a entrega criada antes.
+
+```powershell
+$event = @{ status = "PICKED_UP"; location = "Centro de distribuição Rio" } | ConvertTo-Json
+Invoke-RestMethod -Method Post -Uri "http://localhost:8080/api/v1/shipments/$($shipment.id)/events" `
+    -Headers @{ Authorization = "Bearer $($operatorSession.accessToken)" } `
+    -ContentType "application/json" -Body $event
+
+Invoke-RestMethod -Uri "http://localhost:8080/api/v1/tracking/$($shipment.trackingCode)"
+```
+
+O evento aceita apenas `status` e `location` (opcional, até 150 caracteres; vazio vira
+`null`). Os instantes de ocorrência e recebimento são os do servidor, e a origem é
+`OPERATOR`. Instantes informados pela transportadora, com eventos fora de ordem, chegam
+com os webhooks da próxima etapa; por isso a tabela já separa `occurred_at` e `received_at`.
+A mudança de status e o evento são gravados na mesma transação.
+
+Cancelamento: o cliente cancela a própria entrega somente enquanto ela está `CREATED`,
+antes da coleta; depois disso recebe `409` e precisa falar com um operador.
+O operador pode cancelar qualquer entrega que a máquina de estados permita.
+A regra do cliente é uma política de negócio, separada da máquina de estados, e fica
+em `ShipmentService.cancel`. O evento registra a origem `CUSTOMER` ou `OPERATOR`.
+
+Concorrência: a coluna `version` (`@Version`) aplica bloqueio otimista. Se dois
+operadores mudam a mesma entrega ao mesmo tempo, apenas um grava; o outro recebe `409`
+e pode recarregar e tentar de novo. Não há bloqueio de linha durante a requisição.
+O serviço faz `flush` antes de inserir o evento, para que o conflito apareça antes.
+
+Rastreamento público: a rota não exige token e aceita o código em maiúsculas ou
+minúsculas. Códigos fora do formato de 32 caracteres hexadecimais respondem `400`
+sem consultar o banco; códigos inexistentes, `404`. A resposta é um DTO próprio, sem
+ids, nomes, endereços, CEPs, valores ou a origem interna dos eventos, para que dados
+pessoais não vazem por acidente. O código tem 122 bits aleatórios, o que torna
+inviável descobrir códigos válidos por tentativa. Limite de requisições não faz parte
+desta etapa.
+
+Esta etapa não exigiu migration: a V6 já alinhou as constraints de status, e a tabela
+`tracking_events` com o índice `(shipment_id, occurred_at, received_at)` veio da V4.
+
+Para verificar a máquina de estados, autorização e validação sem Docker:
+
+```powershell
+.\mvnw.cmd "-Dtest=ShipmentStatusTests,ShipmentTests,TrackingServiceTests,TrackingControllerTests,ShipmentServiceTests,ShipmentControllerTests" test
+```
+
+Com Docker em execução, verifique o ciclo completo, o cancelamento, o rastreamento
+público via HTTP e a disputa entre mudanças simultâneas:
+
+```powershell
+.\mvnw.cmd "-Dtest=TrackingEventIntegrationTests,ShipmentCancellationIntegrationTests,PublicTrackingIntegrationTests,TrackingEventConcurrencyIntegrationTests" test
 ```

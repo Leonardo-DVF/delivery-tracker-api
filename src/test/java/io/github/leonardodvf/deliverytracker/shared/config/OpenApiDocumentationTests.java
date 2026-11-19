@@ -10,6 +10,8 @@ import io.github.leonardodvf.deliverytracker.freight.service.FreightService;
 import io.github.leonardodvf.deliverytracker.shipment.controller.ShipmentController;
 import io.github.leonardodvf.deliverytracker.shipment.service.ShipmentService;
 import io.github.leonardodvf.deliverytracker.shared.exception.ApiExceptionHandler;
+import io.github.leonardodvf.deliverytracker.tracking.controller.TrackingController;
+import io.github.leonardodvf.deliverytracker.tracking.service.TrackingService;
 import io.github.leonardodvf.deliverytracker.user.controller.UserController;
 import io.github.leonardodvf.deliverytracker.user.service.UserService;
 import org.junit.jupiter.api.Test;
@@ -45,6 +47,7 @@ class OpenApiDocumentationTests {
     @MockitoBean private JwtDecoder decoder;
     @MockitoBean private FreightService freight;
     @MockitoBean private ShipmentService shipments;
+    @MockitoBean private TrackingService tracking;
 
     @Test
     void exposesOnlyCurrentApiOperationsWithoutAuthentication() throws Exception {
@@ -54,8 +57,9 @@ class OpenApiDocumentationTests {
         assertThat(spec.path("paths").properties().stream().map(Map.Entry::getKey).toList())
                 .containsExactlyInAnyOrder("/api/v1/auth/register", "/api/v1/auth/login", "/api/v1/users/me",
                         "/api/v1/freight/quotes", "/api/v1/shipments", "/api/v1/shipments/{id}",
-                        "/api/v1/shipments/{id}/cancel");
-        verifyNoInteractions(registration, login, users, decoder, freight, shipments);
+                        "/api/v1/shipments/{id}/cancel", "/api/v1/shipments/{id}/events",
+                        "/api/v1/tracking/{trackingCode}");
+        verifyNoInteractions(registration, login, users, decoder, freight, shipments, tracking);
     }
 
     @Test
@@ -142,6 +146,18 @@ class OpenApiDocumentationTests {
         assertThat(spec.at("/paths/~1api~1v1~1shipments~1{id}~1cancel/post/responses/409/$ref").asText())
                 .isEqualTo("#/components/responses/InvalidStatusTransition");
         assertThat(spec.at("/paths/~1api~1v1~1shipments~1{id}~1cancel/post/security/0").has("bearerAuth")).isTrue();
+        var events = spec.at("/paths/~1api~1v1~1shipments~1{id}~1events");
+        assertThat(events.at("/post/security/0").has("bearerAuth")).isTrue();
+        assertThat(events.at("/post/responses/409/$ref").asText()).isEqualTo("#/components/responses/InvalidStatusTransition");
+        assertThat(events.at("/get/security/0").has("bearerAuth")).isTrue();
+        assertThat(spec.at("/components/schemas/RecordTrackingEventRequest/properties").properties().stream()
+                .map(Map.Entry::getKey).toList()).containsExactlyInAnyOrder("status", "location");
+        var publicTracking = spec.at("/paths/~1api~1v1~1tracking~1{trackingCode}/get");
+        assertThat(publicTracking.path("security").size()).isZero();
+        assertThat(publicTracking.at("/parameters/0/schema/pattern").asText()).isEqualTo("[0-9A-Fa-f]{32}");
+        assertThat(spec.at("/components/schemas/PublicTrackingResponse/properties").properties().stream()
+                .map(Map.Entry::getKey).toList())
+                .containsExactlyInAnyOrder("trackingCode", "status", "destinationCity", "destinationState", "updatedAt", "events");
     }
 
     @Test
@@ -180,7 +196,8 @@ class OpenApiDocumentationTests {
             "org.springframework.boot.flyway.autoconfigure.FlywayAutoConfiguration"
     })
     @Import({OpenApiConfig.class, SecurityConfig.class, ApiExceptionHandler.class,
-            RegistrationController.class, LoginController.class, UserController.class, FreightController.class, ShipmentController.class})
+            RegistrationController.class, LoginController.class, UserController.class, FreightController.class, ShipmentController.class,
+            TrackingController.class})
     static class TestApplication {
     }
 }

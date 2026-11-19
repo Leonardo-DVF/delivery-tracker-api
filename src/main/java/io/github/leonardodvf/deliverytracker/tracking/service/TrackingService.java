@@ -62,7 +62,7 @@ public class TrackingService {
                 .map(TrackingEventResponse::from).toList();
     }
 
-    /** Unauthenticated lookup; the 128-bit random tracking code is the only key, so guessing codes is impractical. */
+    /** Unauthenticated lookup; the tracking code has 122 random bits is the only key, so guessing codes is impractical. */
     @Transactional(readOnly = true)
     public PublicTrackingResponse publicTracking(String trackingCode) {
         var shipment = shipments.findByTrackingCode(trackingCode.toUpperCase(Locale.ROOT))
